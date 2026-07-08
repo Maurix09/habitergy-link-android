@@ -2,6 +2,8 @@ package com.habitergy.link.ui.components
 
 import androidx.annotation.DrawableRes
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
@@ -27,10 +29,17 @@ fun MaterialShapeImage(
     @DrawableRes imageRes: Int,
     modifier: Modifier = Modifier,
     imageSize: Dp = 192.dp,
+    fillMaxWidth: Boolean = false,
     contentDescription: String? = null,
 ) {
     val shapePath = remember {
         PathParser().parsePathString(SIX_SIDED_COOKIE_PATH).toPath()
+    }
+
+    val layoutModifier = if (fillMaxWidth) {
+        Modifier.fillMaxWidth().aspectRatio(1f)
+    } else {
+        Modifier.size(imageSize)
     }
 
     Image(
@@ -38,7 +47,7 @@ fun MaterialShapeImage(
         contentDescription = contentDescription,
         contentScale = ContentScale.Crop,
         modifier = modifier
-            .size(imageSize)
+            .then(layoutModifier)
             .drawWithContent {
                 val scale = this.size.width / MATERIAL_SHAPE_VIEWBOX
                 val scaledPath = Path().apply {

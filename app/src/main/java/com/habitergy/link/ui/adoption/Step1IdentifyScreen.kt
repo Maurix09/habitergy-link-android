@@ -61,18 +61,18 @@ fun Step1IdentifyScreen(
             totalSteps = state.totalSteps,
             onBack = onBack,
             content = {
+                MaterialShapeImage(
+                    imageRes = R.drawable.device_qr,
+                    fillMaxWidth = true,
+                    contentDescription = "Código QR del controlador en el kit de instalación",
+                    modifier = Modifier.padding(bottom = 24.dp),
+                )
+
                 ScreenTitle(
                     title = "Identificá el controlador",
                     subtitle = "En el kit de instalación vas a encontrar un código único de 5 caracteres " +
                         "(ej: CX123) junto con un QR. Ingresalo abajo o escanealo con la cámara.",
                     titleSingleLine = true,
-                )
-
-                MaterialShapeImage(
-                    imageRes = R.drawable.device_qr,
-                    imageSize = 192.dp,
-                    contentDescription = "Código QR del controlador en el kit de instalación",
-                    modifier = Modifier.padding(bottom = 24.dp),
                 )
 
                 DeviceCodeInput(
