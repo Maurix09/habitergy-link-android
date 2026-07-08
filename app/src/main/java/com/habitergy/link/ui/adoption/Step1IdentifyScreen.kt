@@ -35,8 +35,7 @@ import com.habitergy.link.domain.model.AdoptionUiState
 import com.habitergy.link.ui.components.AdoptionScreenScaffold
 import com.habitergy.link.ui.components.DeviceCodeInput
 import com.habitergy.link.ui.components.HabitergyPrimaryButton
-import com.habitergy.link.ui.components.MaterialShapeImage
-import com.habitergy.link.ui.components.ScreenTitle
+import com.habitergy.link.ui.components.OnboardingHeroSection
 import com.habitergy.link.ui.theme.HabitergyColors
 import kotlinx.coroutines.launch
 
@@ -61,21 +60,12 @@ fun Step1IdentifyScreen(
             totalSteps = state.totalSteps,
             onBack = onBack,
             content = {
-                MaterialShapeImage(
+                OnboardingHeroSection(
                     imageRes = R.drawable.device_qr,
-                    fillMaxWidth = true,
-                    maxSize = 220.dp,
-                    contentDescription = "Código QR del controlador en el kit de instalación",
-                    modifier = Modifier.padding(bottom = 8.dp),
-                )
-
-                ScreenTitle(
+                    imageContentDescription = "Código QR del controlador en el kit de instalación",
                     title = "Identificá el controlador",
                     subtitle = "En el kit de instalación vas a encontrar un código único de 5 caracteres " +
                         "(ej: CX123) junto con un QR. Ingresalo abajo o escanealo con la cámara.",
-                    titleSingleLine = true,
-                    titleBottomPadding = 8.dp,
-                    contentBottomPadding = 16.dp,
                 )
 
                 DeviceCodeInput(

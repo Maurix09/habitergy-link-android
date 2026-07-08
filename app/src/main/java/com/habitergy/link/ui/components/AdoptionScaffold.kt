@@ -29,7 +29,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.habitergy.link.ui.theme.HabitergyColors
 import com.habitergy.link.ui.theme.HabitergyPillShape
 
@@ -142,7 +141,6 @@ fun ScreenTitle(
     title: String,
     subtitle: String,
     modifier: Modifier = Modifier,
-    titleSingleLine: Boolean = false,
     titleBottomPadding: Dp = 12.dp,
     contentBottomPadding: Dp = 24.dp,
 ) {
@@ -154,13 +152,7 @@ fun ScreenTitle(
     ) {
         Text(
             text = title,
-            style = if (titleSingleLine) {
-                MaterialTheme.typography.displaySmall.copy(fontSize = 28.sp)
-            } else {
-                MaterialTheme.typography.displaySmall
-            },
-            maxLines = if (titleSingleLine) 1 else Int.MAX_VALUE,
-            softWrap = !titleSingleLine,
+            style = MaterialTheme.typography.displaySmall,
             textAlign = TextAlign.Center,
             modifier = Modifier.padding(bottom = titleBottomPadding),
         )
