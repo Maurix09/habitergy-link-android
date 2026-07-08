@@ -17,7 +17,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -43,7 +45,11 @@ fun DeviceCodeInput(
     modifier: Modifier = Modifier,
 ) {
     val focusRequesters = remember { List(DEVICE_CODE_LENGTH) { FocusRequester() } }
-    val chars = List(DEVICE_CODE_LENGTH) { index -> code.getOrElse(index) { ' ' }.let { if (it == ' ') "" else it.toString() } }
+    val currentCode by rememberUpdatedState(code)
+    val currentOnCodeChange by rememberUpdatedState(onCodeChange)
+    val chars = List(DEVICE_CODE_LENGTH) { index ->
+        code.getOrElse(index) { ' ' }.let { if (it == ' ') "" else it.toString() }
+    }
 
     Column(
         modifier = modifier.fillMaxWidth(),
@@ -64,21 +70,21 @@ fun DeviceCodeInput(
                         val sanitized = newValue.uppercase().filter { it.isLetterOrDigit() }
                         when {
                             sanitized.length > 1 -> {
-                                val merged = buildCodeFromPaste(code, index, sanitized)
-                                onCodeChange(merged)
+                                val merged = buildCodeFromPaste(currentCode, index, sanitized)
+                                currentOnCodeChange(merged)
                                 val focusIndex = merged.length.coerceAtMost(DEVICE_CODE_LENGTH - 1)
                                 focusRequesters[focusIndex].requestFocus()
                             }
                             sanitized.length == 1 -> {
-                                val updated = replaceCharAt(code, index, sanitized.first())
-                                onCodeChange(updated)
+                                val updated = replaceCharAt(currentCode, index, sanitized.first())
+                                currentOnCodeChange(updated)
                                 if (index < DEVICE_CODE_LENGTH - 1) {
                                     focusRequesters[index + 1].requestFocus()
                                 }
                             }
                             else -> {
-                                val updated = removeCharAt(code, index)
-                                onCodeChange(updated)
+                                val updated = removeCharAt(currentCode, index)
+                                currentOnCodeChange(updated)
                                 if (index > 0) {
                                     focusRequesters[index - 1].requestFocus()
                                 }
@@ -131,6 +137,8 @@ private fun CodeCharBox(
     }
 
     val state = rememberTextFieldState(initialText = value)
+    val currentValue by rememberUpdatedState(value)
+    val currentOnValueChange by rememberUpdatedState(onValueChange)
 
     LaunchedEffect(value) {
         if (state.text.toString() != value) {
@@ -145,8 +153,8 @@ private fun CodeCharBox(
         snapshotFlow { state.text.toString() }
             .distinctUntilChanged()
             .collect { newValue ->
-                if (newValue != value) {
-                    onValueChange(newValue)
+                if (newValue != currentValue) {
+                    currentOnValueChange(newValue)
                 }
             }
     }
