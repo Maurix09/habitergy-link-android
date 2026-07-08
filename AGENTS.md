@@ -91,6 +91,8 @@ Ver también `apps/link-android/README.md`.
 apps/link-android/
 ├── build.gradle.kts              # Plugins Android/Kotlin/Compose
 ├── settings.gradle.kts
+├── version.properties            # versionName + versionCode (fuente de verdad)
+├── scripts/release.sh            # Bump, tag y push a GitHub
 ├── gradle.properties
 └── app/
     ├── build.gradle.kts          # applicationId, minSdk 26, dependencies
@@ -277,6 +279,7 @@ Cliente HTTP sugerido: Ktor Client o Retrofit en `data/api/`. Auth: JWT igual qu
 5. **Textos en español (es-AR).**
 6. **minSdk 26** — no bajar sin justificación (BLE moderno).
 7. Al agregar paso 3+: incrementar navegación en `AdoptionFlow.kt`, reutilizar `AdoptionScreenScaffold`, mantener `totalSteps = 6` alineado al producto.
+8. **Releases:** si el usuario pide subir/publicar una nueva versión, seguir **§16** y ejecutar `./scripts/release.sh` (patch por defecto; minor solo si lo pide explícitamente). No editar versiones a mano salvo que el usuario lo indique.
 
 ## 14. Roadmap técnico (prioridad sugerida)
 
@@ -298,3 +301,75 @@ Cliente HTTP sugerido: Ktor Client o Retrofit en `data/api/`. Auth: JWT igual qu
 5. Si hay I/O: empezar en `data/mock/`, luego `data/` real.
 6. Probar en emulador Android Studio.
 7. Actualizar este `AGENTS.md` y `README.md` si cambia el flujo o el estado mock/real.
+
+## 16. Releases y versionado
+
+Repositorio público standalone: **`Maurix09/habitergy-link-android`** (https://github.com/Maurix09/habitergy-link-android).
+
+### Fuente de verdad
+
+| Archivo | Contenido |
+|---------|-----------|
+| `version.properties` | `versionName` (semver) y `versionCode` (entero Android) |
+| `app/build.gradle.kts` | Lee `version.properties` automáticamente |
+| Tag Git `vX.Y.Z` | Referencia de la última versión publicada en GitHub |
+
+### Cuándo ejecutar un release
+
+Si el usuario dice cosas como:
+
+- «Subí la nueva versión»
+- «Publicá link-android en GitHub»
+- «Hacé release de Link»
+
+→ Ejecutar **patch** (incremento `0.1.x`):
+
+```bash
+cd apps/link-android
+./scripts/release.sh patch
+```
+
+Si pide explícitamente pasar a `0.2.x` o «versión minor»:
+
+```bash
+./scripts/release.sh minor
+```
+
+Si pide una versión exacta (ej. `0.2.0`):
+
+```bash
+./scripts/release.sh 0.2.0
+```
+
+### Reglas de bump
+
+| Comando | Ejemplo | Cuándo usar |
+|---------|---------|-------------|
+| `patch` (default) | `0.1.3` → `0.1.4` | Cada release habitual |
+| `minor` | `0.1.12` → `0.2.0` | Solo si el usuario lo pide |
+| `X.Y.Z` | fija `0.3.0` | Versión explícita del usuario |
+
+Prioridad para calcular la base: **último tag `v*` en GitHub** → si no hay tags, `version.properties`.
+
+`versionCode` siempre incrementa +1 (requerido por Play Store).
+
+### Qué hace `scripts/release.sh`
+
+1. Clona/actualiza el repo standalone en `/tmp/habitergy-link-android` (o `LINK_ANDROID_STANDALONE_DIR`)
+2. Calcula la nueva versión
+3. Actualiza `version.properties` y la fila **Versión actual** de este `AGENTS.md`
+4. Sincroniza todo el proyecto al repo standalone
+5. Commit `release: vX.Y.Z`, tag `vX.Y.Z`, push a `main`
+6. Crea GitHub Release (si `gh` está autenticado)
+
+### Desarrollo en monorepo vs standalone
+
+- **Desarrollo:** normalmente en `apps/link-android/` dentro de `habitergy-platform`
+- **Publicación:** siempre vía `./scripts/release.sh` → repo standalone en GitHub
+- El usuario en Windows clona `habitergy-link-android` y hace `git pull` para obtener la última versión
+
+### No hacer en releases
+
+- No subir versión en cada commit de desarrollo
+- No editar `versionName`/`versionCode` a mano si el usuario pidió un release (usar el script)
+- No usar `minor` salvo pedido explícito del usuario

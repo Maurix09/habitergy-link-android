@@ -1,22 +1,17 @@
-# Habitergy Link
+# Habitergy Link (Android)
 
-App nativa Android para la **adopción de controladores Shelly** en Habitergy. Comparte el design system M3 con el panel Manager (tokens en `app/src/main/java/com/habitergy/link/ui/theme/`).
+App nativa Android para la **adopción de controladores Shelly** en Habitergy. Comparte el design system M3 con `@habitergy/manager` (ver `packages/design-tokens/habitergy-m3.json`).
 
 ## Requisitos
 
 - Android Studio Ladybug (2024.2+) o más reciente
 - JDK 17
 - Android SDK 35
-- Emulador API 34+ (recomendado: Pixel 6) o dispositivo físico
+- Emulador API 34+ (recomendado: Pixel 6)
 
-## Clonar y abrir
+## Abrir el proyecto
 
-```bash
-git clone https://github.com/Maurix09/habitergy-link-android.git
-cd habitergy-link-android
-```
-
-1. Android Studio → **Open** → seleccionar la carpeta clonada
+1. Android Studio → **Open** → seleccionar `apps/link-android/`
 2. Esperar Gradle Sync
 3. Crear un AVD (Virtual Device) si no tenés uno
 4. Run ▶ en emulador o dispositivo físico
@@ -24,13 +19,9 @@ cd habitergy-link-android
 Desde terminal (con `ANDROID_HOME` configurado):
 
 ```bash
-# Linux / macOS
+cd apps/link-android
 ./gradlew :app:assembleDebug
 ./gradlew :app:installDebug   # requiere emulador/dispositivo conectado
-
-# Windows
-gradlew.bat :app:assembleDebug
-gradlew.bat :app:installDebug
 ```
 
 ## Flujo actual (mock)
@@ -78,6 +69,17 @@ app/src/main/java/com/habitergy/link/
 - [ ] Paso 3: provisioning WiFi vía RPC-over-BLE
 - [ ] Deep link desde Manager PWA
 
-## Relación con Habitergy Platform
+## Relación con Manager
 
-Este repositorio es una extracción standalone de `apps/link-android/` del monorepo Habitergy Platform. Manager PWA sigue siendo el panel del partner; Link es el flujo de vinculación física del Shelly. En Android, el botón “Adoptar controlador” del Manager debería abrir Link vía App Link.
+Manager PWA sigue siendo el panel del partner. Link es el flujo de vinculación física del Shelly. En Android, el botón “Adoptar controlador” del Manager debería abrir Link vía App Link.
+
+## Releases
+
+Versión actual definida en `version.properties`. Para publicar en GitHub:
+
+```bash
+./scripts/release.sh patch   # 0.1.x -> 0.1.(x+1), default
+./scripts/release.sh minor   # 0.1.x -> 0.2.0, solo cuando se pida
+```
+
+Repo standalone: https://github.com/Maurix09/habitergy-link-android
