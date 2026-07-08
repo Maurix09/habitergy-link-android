@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.input.TextFieldLineLimits
 import androidx.compose.foundation.text.input.rememberTextFieldState
@@ -25,6 +24,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextAlign
@@ -136,7 +136,7 @@ private fun CodeCharBox(
         if (state.text.toString() != value) {
             state.edit {
                 replace(0, length, value)
-                placeCursorAtEnd()
+                selection = TextRange(value.length)
             }
         }
     }
@@ -151,37 +151,33 @@ private fun CodeCharBox(
             }
     }
 
-    BasicTextField(
-        state = state,
+    Box(
         modifier = Modifier
             .size(52.dp)
-            .focusRequester(focusRequester),
-        lineLimits = TextFieldLineLimits.SingleLine,
-        textStyle = MaterialTheme.typography.titleLarge.copy(
-            textAlign = TextAlign.Center,
-            color = HabitergyColors.TextTitle,
-        ),
-        cursorBrush = SolidColor(HabitergyColors.Primary),
-        keyboardOptions = KeyboardOptions(
-            capitalization = KeyboardCapitalization.Characters,
-            imeAction = imeAction,
-        ),
-        keyboardActions = KeyboardActions(onDone = { /* lookup triggered from ViewModel */ }),
-        decorator = { innerTextField ->
-            Box(
-                modifier = Modifier
-                    .size(52.dp)
-                    .border(
-                        width = 1.5.dp,
-                        color = borderColor,
-                        shape = RoundedCornerShape(12.dp),
-                    ),
-                contentAlignment = Alignment.Center,
-            ) {
-                innerTextField()
-            }
-        },
-    )
+            .border(
+                width = 1.5.dp,
+                color = borderColor,
+                shape = RoundedCornerShape(12.dp),
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        BasicTextField(
+            state = state,
+            modifier = Modifier
+                .fillMaxWidth()
+                .focusRequester(focusRequester),
+            lineLimits = TextFieldLineLimits.SingleLine,
+            textStyle = MaterialTheme.typography.titleLarge.copy(
+                textAlign = TextAlign.Center,
+                color = HabitergyColors.TextTitle,
+            ),
+            cursorBrush = SolidColor(HabitergyColors.Primary),
+            keyboardOptions = KeyboardOptions(
+                capitalization = KeyboardCapitalization.Characters,
+                imeAction = imeAction,
+            ),
+        )
+    }
 }
 
 private fun replaceCharAt(code: String, index: Int, char: Char): String {

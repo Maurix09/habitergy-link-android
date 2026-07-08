@@ -70,7 +70,7 @@ fun Step1IdentifyScreen(
 
                 MaterialShapeImage(
                     imageRes = R.drawable.device_qr,
-                    size = 192.dp,
+                    imageSize = 192.dp,
                     contentDescription = "Código QR del controlador en el kit de instalación",
                     modifier = Modifier.padding(bottom = 24.dp),
                 )

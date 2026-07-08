@@ -26,7 +26,7 @@ private const val SIX_SIDED_COOKIE_PATH =
 fun MaterialShapeImage(
     @DrawableRes imageRes: Int,
     modifier: Modifier = Modifier,
-    size: Dp = 192.dp,
+    imageSize: Dp = 192.dp,
     contentDescription: String? = null,
 ) {
     val shapePath = remember {
@@ -38,9 +38,9 @@ fun MaterialShapeImage(
         contentDescription = contentDescription,
         contentScale = ContentScale.Crop,
         modifier = modifier
-            .size(size)
+            .size(imageSize)
             .drawWithContent {
-                val scale = size.width / MATERIAL_SHAPE_VIEWBOX
+                val scale = this.size.width / MATERIAL_SHAPE_VIEWBOX
                 val scaledPath = Path().apply {
                     addPath(shapePath)
                     transform(Matrix().apply { scale(scale, scale) })
