@@ -11,24 +11,27 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.input.TextFieldLineLimits
+import androidx.compose.foundation.text.input.rememberTextFieldState
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
-import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.habitergy.link.domain.model.DEVICE_CODE_LENGTH
 import com.habitergy.link.ui.theme.HabitergyColors
+import kotlinx.coroutines.flow.distinctUntilChanged
 
 @Composable
 fun DeviceCodeInput(
@@ -127,13 +130,33 @@ private fun CodeCharBox(
         else -> HabitergyColors.BorderNormal
     }
 
+    val state = rememberTextFieldState(initialText = value)
+
+    LaunchedEffect(value) {
+        if (state.text.toString() != value) {
+            state.edit {
+                replace(0, length, value)
+                placeCursorAtEnd()
+            }
+        }
+    }
+
+    LaunchedEffect(state) {
+        snapshotFlow { state.text.toString() }
+            .distinctUntilChanged()
+            .collect { newValue ->
+                if (newValue != value) {
+                    onValueChange(newValue)
+                }
+            }
+    }
+
     BasicTextField(
-        value = TextFieldValue(value, selection = TextRange(value.length)),
-        onValueChange = onValueChange,
+        state = state,
         modifier = Modifier
             .size(52.dp)
             .focusRequester(focusRequester),
-        singleLine = true,
+        lineLimits = TextFieldLineLimits.SingleLine,
         textStyle = MaterialTheme.typography.titleLarge.copy(
             textAlign = TextAlign.Center,
             color = HabitergyColors.TextTitle,
@@ -144,7 +167,7 @@ private fun CodeCharBox(
             imeAction = imeAction,
         ),
         keyboardActions = KeyboardActions(onDone = { /* lookup triggered from ViewModel */ }),
-        decorationBox = { innerTextField ->
+        decorator = { innerTextField ->
             Box(
                 modifier = Modifier
                     .size(52.dp)

@@ -40,12 +40,13 @@ fun MaterialShapeImage(
         modifier = modifier
             .size(size)
             .drawWithContent {
-                val scale = this.size.width / MATERIAL_SHAPE_VIEWBOX
+                val scale = size.width / MATERIAL_SHAPE_VIEWBOX
                 val scaledPath = Path().apply {
-                    addPath(shapePath, Matrix().apply { scale(scale, scale) })
+                    addPath(shapePath)
+                    transform(Matrix().apply { scale(scale, scale) })
                 }
                 clipPath(scaledPath) {
-                    drawContent()
+                    this@drawWithContent.drawContent()
                 }
             },
     )
