@@ -4,7 +4,9 @@ import androidx.annotation.DrawableRes
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
@@ -30,6 +32,7 @@ fun MaterialShapeImage(
     modifier: Modifier = Modifier,
     imageSize: Dp = 192.dp,
     fillMaxWidth: Boolean = false,
+    maxSize: Dp? = null,
     contentDescription: String? = null,
 ) {
     val shapePath = remember {
@@ -37,7 +40,16 @@ fun MaterialShapeImage(
     }
 
     val layoutModifier = if (fillMaxWidth) {
-        Modifier.fillMaxWidth().aspectRatio(1f)
+        Modifier
+            .fillMaxWidth()
+            .then(
+                if (maxSize != null) {
+                    Modifier.widthIn(max = maxSize).heightIn(max = maxSize)
+                } else {
+                    Modifier
+                },
+            )
+            .aspectRatio(1f)
     } else {
         Modifier.size(imageSize)
     }

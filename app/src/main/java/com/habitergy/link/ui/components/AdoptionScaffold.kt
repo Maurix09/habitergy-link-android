@@ -27,6 +27,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.habitergy.link.ui.theme.HabitergyColors
@@ -142,11 +143,13 @@ fun ScreenTitle(
     subtitle: String,
     modifier: Modifier = Modifier,
     titleSingleLine: Boolean = false,
+    titleBottomPadding: Dp = 12.dp,
+    contentBottomPadding: Dp = 24.dp,
 ) {
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .padding(bottom = 24.dp),
+            .padding(bottom = contentBottomPadding),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Text(
@@ -159,7 +162,7 @@ fun ScreenTitle(
             maxLines = if (titleSingleLine) 1 else Int.MAX_VALUE,
             softWrap = !titleSingleLine,
             textAlign = TextAlign.Center,
-            modifier = Modifier.padding(bottom = 12.dp),
+            modifier = Modifier.padding(bottom = titleBottomPadding),
         )
         Text(
             text = subtitle,

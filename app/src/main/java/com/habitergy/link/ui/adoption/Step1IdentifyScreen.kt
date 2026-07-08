@@ -64,8 +64,9 @@ fun Step1IdentifyScreen(
                 MaterialShapeImage(
                     imageRes = R.drawable.device_qr,
                     fillMaxWidth = true,
+                    maxSize = 220.dp,
                     contentDescription = "Código QR del controlador en el kit de instalación",
-                    modifier = Modifier.padding(bottom = 24.dp),
+                    modifier = Modifier.padding(bottom = 8.dp),
                 )
 
                 ScreenTitle(
@@ -73,6 +74,8 @@ fun Step1IdentifyScreen(
                     subtitle = "En el kit de instalación vas a encontrar un código único de 5 caracteres " +
                         "(ej: CX123) junto con un QR. Ingresalo abajo o escanealo con la cámara.",
                     titleSingleLine = true,
+                    titleBottomPadding = 8.dp,
+                    contentBottomPadding = 16.dp,
                 )
 
                 DeviceCodeInput(
