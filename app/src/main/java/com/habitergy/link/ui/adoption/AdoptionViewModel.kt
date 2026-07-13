@@ -2,11 +2,15 @@ package com.habitergy.link.ui.adoption
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.habitergy.link.data.mock.MockAdoptionData
+import com.habitergy.link.data.AdoptionLookupResult
+import com.habitergy.link.data.AdoptionRepository
+import com.habitergy.link.domain.DeviceCode
 import com.habitergy.link.domain.model.AdoptionUiState
 import com.habitergy.link.domain.model.BleScanPhase
 import com.habitergy.link.domain.model.DEVICE_CODE_LENGTH
+import com.habitergy.link.domain.model.DeviceLookupState
 import com.habitergy.link.domain.model.IdentificationMode
+import com.habitergy.link.domain.model.ResolvedDevice
 import com.habitergy.link.domain.model.UNKNOWN_DEVICE_CODE
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -14,33 +18,32 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
-class AdoptionViewModel : ViewModel() {
+class AdoptionViewModel(
+    private val repository: AdoptionRepository = AdoptionRepository(),
+) : ViewModel() {
 
     private val _uiState = MutableStateFlow(AdoptionUiState())
     val uiState: StateFlow<AdoptionUiState> = _uiState.asStateFlow()
 
     fun onDeviceCodeChange(value: String) {
-        val sanitized = value
-            .uppercase()
-            .filter { it.isLetterOrDigit() }
-            .take(DEVICE_CODE_LENGTH)
+        val sanitized = DeviceCode.normalizeSuffix(value).take(DEVICE_CODE_LENGTH)
 
         _uiState.update {
             it.copy(
                 deviceCodeInput = sanitized,
                 identificationMode = IdentificationMode.WithCode,
                 resolvedDevice = null,
-                lookupError = null,
+                lookupState = DeviceLookupState.Idle,
             )
         }
 
-        if (sanitized.length == DEVICE_CODE_LENGTH) {
-            lookupDeviceCode()
+        if (sanitized.length == DEVICE_CODE_LENGTH && sanitized != UNKNOWN_DEVICE_CODE) {
+            resolveDeviceCode(sanitized)
         }
     }
 
     fun onScanQrClick() {
-        // Placeholder hasta integrar CameraX + lector QR.
+        // Placeholder hasta integrar CameraX + lector QR (snackbar "Coming soon" en la UI).
     }
 
     fun proceedWithoutKnownCode() {
@@ -49,66 +52,73 @@ class AdoptionViewModel : ViewModel() {
                 deviceCodeInput = UNKNOWN_DEVICE_CODE,
                 identificationMode = IdentificationMode.NoCode,
                 resolvedDevice = null,
-                lookupError = null,
-                isLookingUp = false,
+                lookupState = DeviceLookupState.Idle,
             )
         }
         navigateToStep2()
     }
 
-    fun lookupDeviceCode() {
-        val code = _uiState.value.deviceCodeInput
-        if (code.length < DEVICE_CODE_LENGTH) {
-            return
-        }
-
-        if (code == UNKNOWN_DEVICE_CODE) {
-            return
-        }
-
-        viewModelScope.launch {
-            _uiState.update { it.copy(isLookingUp = true, lookupError = null) }
-            MockAdoptionData.lookupDeviceCode(code)
-                .onSuccess { device ->
-                    _uiState.update {
-                        it.copy(
-                            isLookingUp = false,
-                            resolvedDevice = device,
-                            lookupError = null,
-                            identificationMode = IdentificationMode.WithCode,
-                        )
-                    }
-                }
-                .onFailure { error ->
-                    _uiState.update {
-                        it.copy(
-                            isLookingUp = false,
-                            resolvedDevice = null,
-                            lookupError = error.message,
-                        )
-                    }
-                }
+    fun proceedToStep2() {
+        if (_uiState.value.canProceedFromStep1) {
+            navigateToStep2()
         }
     }
 
-    fun proceedToStep2() {
-        val state = _uiState.value
-        if (state.isLookingUp || state.resolvedDevice == null) return
-        navigateToStep2()
+    private fun resolveDeviceCode(suffix: String) {
+        if (!DeviceCode.isValidSuffix(suffix)) {
+            _uiState.update {
+                it.copy(lookupState = DeviceLookupState.Invalid, resolvedDevice = null)
+            }
+            return
+        }
+
+        val fullCode = DeviceCode.fullCode(suffix)
+
+        viewModelScope.launch {
+            _uiState.update { it.copy(lookupState = DeviceLookupState.Looking, resolvedDevice = null) }
+
+            when (val result = repository.lookup(fullCode)) {
+                is AdoptionLookupResult.Found -> {
+                    when (result.status) {
+                        STATUS_AVAILABLE -> _uiState.update {
+                            it.copy(
+                                lookupState = DeviceLookupState.Available,
+                                resolvedDevice = ResolvedDevice(
+                                    deviceCode = result.deviceCode,
+                                    macAddress = result.macAddress,
+                                    model = result.model,
+                                ),
+                            )
+                        }
+                        STATUS_ASSIGNED -> _uiState.update {
+                            it.copy(lookupState = DeviceLookupState.Assigned, resolvedDevice = null)
+                        }
+                        else -> _uiState.update {
+                            it.copy(lookupState = DeviceLookupState.Unavailable, resolvedDevice = null)
+                        }
+                    }
+                }
+                AdoptionLookupResult.NotFound -> _uiState.update {
+                    it.copy(lookupState = DeviceLookupState.NotFound, resolvedDevice = null)
+                }
+                AdoptionLookupResult.NetworkError -> _uiState.update {
+                    it.copy(lookupState = DeviceLookupState.NetworkError, resolvedDevice = null)
+                }
+            }
+        }
     }
 
     private fun navigateToStep2() {
         _uiState.update {
             it.copy(
                 currentStep = 2,
-                bleScanPhase = BleScanPhase.Scanning,
+                bleScanPhase = BleScanPhase.NotImplemented,
                 scannedDevices = emptyList(),
                 matchedDevice = null,
                 selectedDeviceId = null,
                 bleErrorMessage = null,
             )
         }
-        startBleScan()
     }
 
     fun goBackToStep1() {
@@ -127,70 +137,15 @@ class AdoptionViewModel : ViewModel() {
     }
 
     fun retryBleScan() {
-        _uiState.update {
-            it.copy(
-                bleScanPhase = BleScanPhase.Scanning,
-                scannedDevices = emptyList(),
-                matchedDevice = null,
-                selectedDeviceId = null,
-                bleErrorMessage = null,
-            )
-        }
-        startBleScan()
+        // BLE real pendiente — sin acción por ahora.
     }
 
     fun selectDevice(deviceId: String) {
         _uiState.update { it.copy(selectedDeviceId = deviceId) }
     }
 
-    private fun startBleScan() {
-        viewModelScope.launch {
-            try {
-                val devices = MockAdoptionData.scanBleDevices()
-                val targetMac = _uiState.value.targetMacAddress
-
-                if (targetMac != null) {
-                    val match = devices.find { MockAdoptionData.macsMatch(it.macAddress, targetMac) }
-                    if (match != null) {
-                        _uiState.update {
-                            it.copy(
-                                bleScanPhase = BleScanPhase.Matched,
-                                matchedDevice = match,
-                                scannedDevices = devices,
-                                selectedDeviceId = match.id,
-                            )
-                        }
-                    } else {
-                        _uiState.update {
-                            it.copy(
-                                bleScanPhase = BleScanPhase.Error,
-                                scannedDevices = devices,
-                                bleErrorMessage =
-                                    "No encontramos el controlador $targetMac cerca. " +
-                                    "Verificá que esté encendido y en modo de configuración.",
-                            )
-                        }
-                    }
-                } else {
-                    _uiState.update {
-                        it.copy(
-                            bleScanPhase = if (devices.isEmpty()) {
-                                BleScanPhase.Empty
-                            } else {
-                                BleScanPhase.SelectDevice
-                            },
-                            scannedDevices = devices,
-                        )
-                    }
-                }
-            } catch (_: Exception) {
-                _uiState.update {
-                    it.copy(
-                        bleScanPhase = BleScanPhase.Error,
-                        bleErrorMessage = "No pudimos completar el escaneo Bluetooth. Intentá de nuevo.",
-                    )
-                }
-            }
-        }
+    private companion object {
+        private const val STATUS_AVAILABLE = "available"
+        private const val STATUS_ASSIGNED = "assigned"
     }
 }

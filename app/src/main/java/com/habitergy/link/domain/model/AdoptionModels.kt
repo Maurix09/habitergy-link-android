@@ -1,6 +1,9 @@
 package com.habitergy.link.domain.model
 
-/** Longitud fija del código de instalación impreso en el kit. */
+/**
+ * Longitud del sufijo que tipea el usuario (cuerpo de 4 + checksum de 1).
+ * El prefijo "SH-" es fijo en la UI y no se cuenta aquí.
+ */
 const val DEVICE_CODE_LENGTH = 5
 
 /** Código reservado cuando el partner adopta sin código conocido. */
@@ -15,7 +18,22 @@ enum class IdentificationMode {
     NoCode,
 }
 
-/** Dispositivo resuelto desde la API (mock) a partir del deviceCode. */
+/**
+ * Estado del lookup del device_code en el paso 1. Implica color y mensaje:
+ * Available → verde; el resto → rojo; Looking → spinner.
+ */
+enum class DeviceLookupState {
+    Idle,
+    Invalid,
+    Looking,
+    Available,
+    Assigned,
+    Unavailable,
+    NotFound,
+    NetworkError,
+}
+
+/** Dispositivo resuelto desde la API a partir del deviceCode. */
 data class ResolvedDevice(
     val deviceCode: String,
     val macAddress: String,
@@ -44,6 +62,7 @@ enum class BleScanPhase {
     SelectDevice,
     Empty,
     Error,
+    NotImplemented,
 }
 
 data class AdoptionUiState(
@@ -53,8 +72,7 @@ data class AdoptionUiState(
     val deviceCodeInput: String = "",
     val identificationMode: IdentificationMode = IdentificationMode.WithCode,
     val resolvedDevice: ResolvedDevice? = null,
-    val lookupError: String? = null,
-    val isLookingUp: Boolean = false,
+    val lookupState: DeviceLookupState = DeviceLookupState.Idle,
     // Paso 2
     val bleScanPhase: BleScanPhase = BleScanPhase.Idle,
     val scannedDevices: List<ScannedShellyDevice> = emptyList(),
@@ -65,8 +83,11 @@ data class AdoptionUiState(
     val isUnknownDeviceCode: Boolean
         get() = deviceCodeInput == UNKNOWN_DEVICE_CODE
 
+    val isLookingUp: Boolean
+        get() = lookupState == DeviceLookupState.Looking
+
     val canProceedFromStep1: Boolean
-        get() = resolvedDevice != null && lookupError == null && !isLookingUp
+        get() = lookupState == DeviceLookupState.Available
 
     val targetMacAddress: String?
         get() = if (isUnknownDeviceCode) null else resolvedDevice?.macAddress

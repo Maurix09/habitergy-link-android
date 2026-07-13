@@ -22,9 +22,6 @@ fun AdoptionFlow(
         )
         2 -> Step2BleScanScreen(
             state = state,
-            onSelectDevice = viewModel::selectDevice,
-            onRetry = viewModel::retryBleScan,
-            onContinue = { /* placeholder paso 3 */ },
             onBack = viewModel::goBackToStep1,
         )
         else -> Step1IdentifyScreen(

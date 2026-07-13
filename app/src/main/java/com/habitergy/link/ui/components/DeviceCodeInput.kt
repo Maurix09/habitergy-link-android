@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -25,6 +26,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.ImeAction
@@ -32,6 +34,7 @@ import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.habitergy.link.domain.model.DEVICE_CODE_LENGTH
+import com.habitergy.link.domain.model.DeviceLookupState
 import com.habitergy.link.ui.theme.HabitergyColors
 import kotlinx.coroutines.flow.distinctUntilChanged
 
@@ -39,9 +42,8 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 fun DeviceCodeInput(
     code: String,
     onCodeChange: (String) -> Unit,
-    isLookingUp: Boolean,
-    lookupError: String?,
-    resolvedLabel: String?,
+    lookupState: DeviceLookupState,
+    resolvedModel: String?,
     modifier: Modifier = Modifier,
 ) {
     val focusRequesters = remember { List(DEVICE_CODE_LENGTH) { FocusRequester() } }
@@ -51,19 +53,37 @@ fun DeviceCodeInput(
         code.getOrElse(index) { ' ' }.let { if (it == ' ') "" else it.toString() }
     }
 
+    val isLooking = lookupState == DeviceLookupState.Looking
+    val stateColor: Color? = when (lookupState) {
+        DeviceLookupState.Invalid,
+        DeviceLookupState.Assigned,
+        DeviceLookupState.Unavailable,
+        DeviceLookupState.NotFound,
+        DeviceLookupState.NetworkError -> HabitergyColors.Error
+        DeviceLookupState.Available -> HabitergyColors.Primary
+        DeviceLookupState.Looking -> HabitergyColors.Primary
+        DeviceLookupState.Idle -> null
+    }
+
     Column(
         modifier = modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterHorizontally),
+            horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            Text(
+                text = "SH-",
+                style = MaterialTheme.typography.titleLarge,
+                color = HabitergyColors.TextTitle,
+            )
+
             repeat(DEVICE_CODE_LENGTH) { index ->
                 CodeCharBox(
                     value = chars[index],
-                    isError = lookupError != null,
+                    stateColor = stateColor,
                     focusRequester = focusRequesters[index],
                     imeAction = if (index == DEVICE_CODE_LENGTH - 1) ImeAction.Done else ImeAction.Next,
                     onValueChange = { newValue ->
@@ -94,7 +114,7 @@ fun DeviceCodeInput(
                 )
             }
 
-            if (isLookingUp) {
+            if (isLooking) {
                 CircularProgressIndicator(
                     modifier = Modifier.size(20.dp),
                     strokeWidth = 2.dp,
@@ -103,35 +123,50 @@ fun DeviceCodeInput(
             }
         }
 
-        when {
-            lookupError != null -> Text(
-                text = lookupError,
-                color = HabitergyColors.Error,
-                style = MaterialTheme.typography.bodyMedium,
-                modifier = Modifier.fillMaxWidth(),
-                textAlign = TextAlign.Center,
-            )
-            resolvedLabel != null -> Text(
-                text = "Encontrado: $resolvedLabel",
-                color = HabitergyColors.Primary,
-                style = MaterialTheme.typography.bodyMedium,
-                modifier = Modifier.fillMaxWidth(),
-                textAlign = TextAlign.Center,
-            )
-        }
+        LookupMessage(lookupState = lookupState, resolvedModel = resolvedModel)
     }
+}
+
+@Composable
+private fun LookupMessage(
+    lookupState: DeviceLookupState,
+    resolvedModel: String?,
+    modifier: Modifier = Modifier,
+) {
+    val (text, color) = when (lookupState) {
+        DeviceLookupState.Invalid -> "Código inválido" to HabitergyColors.Error
+        DeviceLookupState.Available ->
+            "Controlador encontrado: ${resolvedModel ?: ""}".trimEnd() to HabitergyColors.Primary
+        DeviceLookupState.NotFound ->
+            "No encontramos un controlador con ese código" to HabitergyColors.Error
+        DeviceLookupState.Assigned ->
+            "Este controlador ya está asignado" to HabitergyColors.Error
+        DeviceLookupState.Unavailable ->
+            "Este controlador no está disponible para adoptar" to HabitergyColors.Error
+        DeviceLookupState.NetworkError ->
+            "No pudimos verificar el código. Revisá tu conexión." to HabitergyColors.Error
+        DeviceLookupState.Looking, DeviceLookupState.Idle -> return
+    }
+
+    Text(
+        text = text,
+        color = color,
+        style = MaterialTheme.typography.bodyMedium,
+        modifier = modifier.fillMaxWidth(),
+        textAlign = TextAlign.Center,
+    )
 }
 
 @Composable
 private fun CodeCharBox(
     value: String,
-    isError: Boolean,
+    stateColor: Color?,
     focusRequester: FocusRequester,
     imeAction: ImeAction,
     onValueChange: (String) -> Unit,
 ) {
     val borderColor = when {
-        isError -> HabitergyColors.Error
+        stateColor != null -> stateColor
         value.isNotEmpty() -> HabitergyColors.Primary
         else -> HabitergyColors.BorderNormal
     }
@@ -161,7 +196,7 @@ private fun CodeCharBox(
 
     Box(
         modifier = Modifier
-            .size(52.dp)
+            .size(48.dp)
             .border(
                 width = 1.5.dp,
                 color = borderColor,

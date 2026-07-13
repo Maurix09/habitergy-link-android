@@ -12,7 +12,7 @@ Este archivo provee contexto esencial para cualquier agente de IA (LLM) que deba
 | **Propósito** | Wizard nativo de adopción de controladores **Shelly 1PM Gen3/Gen4** (BLE, WiFi, provisioning) |
 | **Stack** | Kotlin + Jetpack Compose + Material 3 |
 | **Build** | Gradle ( **no** forma parte de pnpm/Turbo del monorepo ) |
-| **Versión actual** | `0.1.5` — pasos **1 y 2** con datos **mock** |
+| **Versión actual** | `0.1.6` — paso **1 real** (lookup API + checksum), paso **2 placeholder** BLE |
 | **Play Store (planeado)** | Habitergy Link |
 
 Link reemplaza el wizard web de adopción en Android: acceso nativo a BLE, WiFi y provisioning sin limitaciones de Web Bluetooth ni mixed content.
@@ -89,28 +89,32 @@ Ver también `apps/link-android/README.md`.
 
 ```
 apps/link-android/
-├── build.gradle.kts              # Plugins Android/Kotlin/Compose
+├── build.gradle.kts              # Plugins Android/Kotlin/Compose/Serialization
 ├── settings.gradle.kts
 ├── version.properties            # versionName + versionCode (fuente de verdad)
 ├── scripts/release.sh            # Bump, tag y push a GitHub
 ├── gradle.properties
 └── app/
-    ├── build.gradle.kts          # applicationId, minSdk 26, dependencies
+    ├── build.gradle.kts          # applicationId, minSdk 26, Ktor + serialization deps
     └── src/main/
-        ├── AndroidManifest.xml   # Permisos BLE, location, camera
+        ├── AndroidManifest.xml   # Permisos BLE, location, camera, INTERNET
+        ├── res/xml/network_security_config.xml  # Cleartext solo 10.0.2.2 (debug)
         ├── java/com/habitergy/link/
         │   ├── MainActivity.kt           # Entry: HabitergyTheme + AdoptionFlow
-        │   ├── domain/model/
-        │   │   └── AdoptionModels.kt     # UiState, enums, data classes
-        │   ├── data/mock/
-        │   │   └── MockAdoptionData.kt   # Lookup código + escaneo BLE simulado
+        │   ├── domain/
+        │   │   ├── DeviceCode.kt         # Checksum SH-XXXXC (réplica de @habitergy/utils)
+        │   │   └── model/
+        │   │       └── AdoptionModels.kt # UiState, enums, data classes, DeviceLookupState
+        │   ├── data/
+        │   │   ├── api/                  # Ktor: ApiConfig, AdoptionApi, AdoptionDeviceDto
+        │   │   └── AdoptionRepository.kt # Lookup device_code → AdoptionLookupResult
         │   └── ui/
         │       ├── adoption/
         │       │   ├── AdoptionFlow.kt       # Switch paso 1 / 2
-        │       │   ├── AdoptionViewModel.kt  # Lógica del wizard
+        │       │   ├── AdoptionViewModel.kt  # Lógica del wizard (lookup real)
         │       │   ├── Step1IdentifyScreen.kt
-        │       │   └── Step2BleScanScreen.kt
-        │       ├── components/             # Scaffold, botones, tarjetas
+        │       │   └── Step2BleScanScreen.kt  # Placeholder BLE
+        │       ├── components/             # Scaffold, botones, tarjetas, DeviceCodeInput
         │       └── theme/                  # HabitergyColors, Theme, Typography, Shape
         └── res/                            # strings, colors, launcher, themes
 ```
@@ -120,10 +124,10 @@ apps/link-android/
 | Capa | Paquete | Responsabilidad |
 |------|---------|-----------------|
 | UI | `ui/` | Composables, ViewModels |
-| Dominio | `domain/model/` | Modelos puros, sin Android |
-| Datos | `data/` | Repositorios, API, BLE real, mock |
-| (futuro) | `data/ble/` | `BluetoothLeScanner`, GATT Shelly |
-| (futuro) | `data/api/` | Ktor/Retrofit → `apps/api` |
+| Dominio | `domain/` | `DeviceCode` (checksum), modelos puros sin Android |
+| Datos | `data/api/` | Ktor → `apps/api` (lookup adopción) |
+| Datos | `data/` | `AdoptionRepository` (abstracción sobre la API) |
+| (futuro) | `data/ble/` | `BluetoothLeScanner`, GATT Shelly (paso 2 real) |
 
 ## 6. Flujo de adopción (Link) — estado actual
 
@@ -148,41 +152,42 @@ Dos modos (`IdentificationMode`):
 
 | Modo | Cómo se activa | Comportamiento |
 |------|----------------|----------------|
-| **WithCode** | Default; usuario escribe código o escanea QR | Lookup mock → obtiene MAC + modelo |
-| **NoCode** | Botón «No tengo el código» | Sin MAC; en paso 2 el partner elige manualmente |
+| **WithCode** | Default; usuario escribe los 5 caracteres del sufijo o escanea QR | Validación local de checksum → lookup API → estado de UI |
+| **NoCode** | Botón «¿No tenés el código?» | Sin MAC; avanza directo al paso 2 (placeholder) |
+
+Formato del `device_code`: `SH-XXXXC` (prefijo `SH-` fijo + 4 cuerpo + 1 checksum). La UI muestra `SH-` fijo y 5 cajas para el sufijo.
 
 Acciones:
 
-- **Campo código:** placeholder `CX123` o `SH-AB12`. Al escribir, vuelve a modo `WithCode`.
-- **Escanear QR:** mock — rellena `CX123` y dispara lookup (sin CameraX aún).
-- **Lookup:** `MockAdoptionData.lookupDeviceCode()` (~600 ms). Muestra modelo + MAC o error.
-- **Siguiente:** si hay código sin resolver, lookup automático y luego avanza; si `NoCode`, avanza directo.
+- **Campo código:** el usuario tipea el sufijo de 5 chars (cuerpo + checksum). Al cambiar, se resetea el estado de lookup.
+- **Al completar el 5º carácter** (`onDeviceCodeChange` → `resolveDeviceCode`):
+  1. **Checksum local** (`DeviceCode.isValidSuffix`): si falla → `DeviceLookupState.Invalid` → aviso rojo «Código inválido» (sin llamar a la API).
+  2. Si pasa → `AdoptionRepository.lookup("SH-XXXXC")` → `GET /api/adoption/devices/:deviceCode`:
+     - `200 status=available` → `Available` (verde «Controlador encontrado: <modelo>») + `ResolvedDevice` con MAC.
+     - `200 status=assigned` → `Assigned` (rojo «Este controlador ya está asignado»).
+     - `200 status=otro` (rma/lost/damaged) → `Unavailable` (rojo «no disponible para adoptar»).
+     - `404` → `NotFound` (rojo «No encontramos un controlador con ese código»).
+     - error de red / otro → `NetworkError` (rojo «No pudimos verificar el código…»).
+- **Escanear QR:** botón visible, snackbar «Coming soon» (sin CameraX aún).
+- **Siguiente:** habilitado solo si `lookupState == Available`; avanza al paso 2. Si `NoCode`, avanza directo.
+
+Colores: verde `HabitergyColors.Primary` (Available), rojo `HabitergyColors.Error` (resto). Border de las cajas y mensaje reflejan `lookupState`.
 
 ### Paso 2 — Conectá por Bluetooth (`Step2BleScanScreen`)
 
-Escaneo **simulado** (~2 s) vía `MockAdoptionData.scanBleDevices()`.
-
-| Condición | Resultado (`BleScanPhase`) | UI |
-|-----------|----------------------------|-----|
-| MAC conocida (paso 1 con código) + match en scan | `Matched` | Banner «Controlador encontrado» + Continuar |
-| MAC conocida + sin match | `Error` | Mensaje + «Volver a buscar» |
-| Sin MAC (modo NoCode) + dispositivos | `SelectDevice` | Lista `ShellyDeviceCard` + Continuar |
-| Sin MAC + lista vacía | `Empty` | Mensaje + reintentar |
-| Escaneando | `Scanning` | Spinner |
-
-**Continuar** en paso 2 muestra un `AlertDialog` placeholder del paso 3 (WiFi) — no navega aún.
+**Placeholder.** El escaneo BLE real (`BluetoothLeScanner` + filtro Allterco) no está implementado. La pantalla muestra un aviso «próximamente» + botón Volver. No usa datos mock. La máquina de estados `BleScanPhase` (Matched/SelectDevice/Empty/Error) se conserva en `AdoptionModels` para cuando se implemente BLE real contra un repositorio BLE.
 
 Navegación: `AdoptionFlow` hace `when (state.currentStep)`; back en paso 2 → `goBackToStep1()`.
 
 ## 7. Estado y lógica (`AdoptionViewModel`)
 
-Fuente única de verdad: `StateFlow<AdoptionUiState>`.
+Fuente única de verdad: `StateFlow<AdoptionUiState>`. Depende de `AdoptionRepository` (inyectable, default `AdoptionRepository()`).
 
 Campos principales:
 
 ```kotlin
 // Paso 1
-deviceCodeInput, identificationMode, resolvedDevice, lookupError, isLookingUp
+deviceCodeInput, identificationMode, resolvedDevice, lookupState
 
 // Paso 2
 bleScanPhase, scannedDevices, matchedDevice, selectedDeviceId, bleErrorMessage
@@ -193,31 +198,16 @@ currentStep, totalSteps (= 6)
 
 Propiedades derivadas en `AdoptionUiState`:
 
-- `canProceedFromStep1` — código no vacío (modo WithCode) o modo NoCode
+- `isLookingUp` — `lookupState == Looking`
+- `canProceedFromStep1` — `lookupState == Available`
 - `targetMacAddress` — MAC del `resolvedDevice` (null si NoCode)
 - `selectedDevice` — `matchedDevice` o el elegido en lista
 
-**Al reemplazar mock por BLE real:** modificar `startBleScan()` en `AdoptionViewModel` para llamar un repositorio BLE; mantener la misma máquina de estados `BleScanPhase`.
+**Al implementar BLE real:** restaurar `startBleScan()` en `AdoptionViewModel` llamando un repositorio BLE; reutilizar la máquina de estados `BleScanPhase`.
 
-## 8. Datos mock (`MockAdoptionData`)
+## 8. Datos mock
 
-| Código | MAC | Modelo |
-|--------|-----|--------|
-| `CX123` | `3C:E8:1A:12:34:56` | Shelly 1PM Gen3 |
-| `SH-AB12` | `3C:E8:1A:12:34:56` | Shelly 1PM Gen3 |
-| `SH-T3ST` | `8A:13:BF:AB:CD:EF` | Shelly 1PM Gen4 |
-
-Dispositivos BLE mock (paso 2):
-
-| Nombre | MAC | RSSI |
-|--------|-----|------|
-| Shelly1PM-3CE81A | 3C:E8:1A:12:34:56 | -58 |
-| Shelly1PM-8A13BF | 8A:13:BF:AB:CD:EF | -71 |
-| Shelly1PM-D84210 | D8:42:10:11:22:33 | -82 |
-
-Constante QR mock: `MOCK_QR_DEVICE_CODE = "CX123"`.
-
-Helper `macsMatch()` normaliza MACs (sin `:`) para comparar anuncios BLE con la MAC de BD.
+**Eliminados.** `MockAdoptionData.kt` y todos los datos de prueba (CX123/AB123/T3ST1, lista BLE fija, `MOCK_QR_DEVICE_CODE`, helper `macsMatch`) fueron retirados. El paso 1 usa lookup real contra la API; el paso 2 es un placeholder sin datos mock.
 
 ## 9. Qué es real vs mock
 
@@ -225,25 +215,26 @@ Helper `macsMatch()` normaliza MACs (sin `:`) para comparar anuncios BLE con la 
 |---------------|--------|
 | UI pasos 1–2 | **Real** (Compose) |
 | Tema M3 Habitergy | **Real** |
-| Lookup deviceCode → MAC | **Mock** (`MockAdoptionData`) |
-| Escaneo QR | **Mock** (botón simula lectura) |
-| Escaneo BLE | **Mock** (delay 2 s, lista fija) |
+| Validación checksum device_code | **Real** (`domain/DeviceCode.kt`, réplica de `@habitergy/utils`) |
+| Lookup deviceCode → MAC/model/status | **Real** (`AdoptionRepository` → `GET /api/adoption/devices/:deviceCode`) |
+| Cliente HTTP (Ktor) | **Real** |
+| Escaneo QR | **Placeholder** (botón + snackbar «Coming soon») |
+| Escaneo BLE | **Placeholder** (pantalla «próximamente») |
 | Auth JWT / login | **No implementado** |
-| API HTTP | **No implementado** |
 | GATT / RPC-over-BLE Shelly | **No implementado** |
 | WiFi provisioning (paso 3+) | **No implementado** |
 | Deep link desde Manager | **No implementado** |
 
 ## 10. Permisos (`AndroidManifest.xml`)
 
-Declarados para iteraciones futuras; el mock no los usa aún:
-
-- `BLUETOOTH`, `BLUETOOTH_ADMIN` (maxSdk 30)
-- `BLUETOOTH_SCAN`, `BLUETOOTH_CONNECT`
+- `BLUETOOTH`, `BLUETOOTH_ADMIN` (maxSdk 30) — BLE real (futuro)
+- `BLUETOOTH_SCAN`, `BLUETOOTH_CONNECT` — BLE real (futuro)
 - `ACCESS_FINE_LOCATION` (requerido para BLE scan en Android)
-- `CAMERA` (QR)
+- `CAMERA` (QR, futuro)
+- `INTERNET` — lookup HTTP contra `apps/api` (**en uso**)
 
 `uses-feature`: `bluetooth_le` required; `camera` optional.
+`networkSecurityConfig`: cleartext solo para `10.0.2.2` (host del emulador en debug).
 
 ## 11. Protocolo Shelly (referencia para BLE real)
 
@@ -254,28 +245,29 @@ Al implementar escaneo/conexión real, reutilizar la lógica documentada en Mana
 | Manufacturer ID Allterco | `0x0BA9` — `apps/manager/src/lib/bluetooth/shellyManufacturerData.ts` |
 | Modelos soportados | Gen3 `0x1019`, Gen4 `0x1029` — `shellyModels.ts` |
 | RPC-over-BLE flag | bit 2 en manufacturer data |
-| Formato device_code en BD | `SH-XXXX` — `packages/utils/src/shortCode.ts`, `isValidDeviceCode()` |
+| Formato device_code en BD | `SH-XXXXC` (SH- + 4 cuerpo + 1 checksum) — `packages/utils/src/shortCode.ts`, `isValidDeviceCode()` |
 | Tabla devices | `mac_address`, `device_code`, `model`, `status` — `packages/database/schema.prisma` |
 
 Manager también tiene parsing de anuncios en `shellyAdvertisement.ts` — portar a Kotlin en `data/ble/` cuando corresponda.
 
-## 12. API backend (integración futura)
+## 12. API backend (integración)
 
-Endpoints existentes relevantes:
+Endpoints relevantes:
 
-- `GET /api/devices/code/:deviceCode` — consulta pública por código (ver `apps/api/src/controllers/deviceController.ts`)
-- `GET /api/devices` — lista del partner autenticado
+- `GET /api/adoption/devices/:deviceCode` — **lookup de adopción** (público). Devuelve `{ deviceCode, model, macAddress, status }`. Usado por el paso 1. Ver `apps/api/src/controllers/adoptionController.ts`.
+- `GET /api/devices/code/:deviceCode` — consulta pública por código (estado/telemetría, usado por Habitergy GO). Ver `apps/api/src/controllers/deviceController.ts`.
+- `GET /api/devices` — lista del partner autenticado.
 
-**Pendiente para adopción completa:** endpoint de registro/provisionamiento del dispositivo adoptado y vinculación a `site_id`.
+**Pendiente para adopción completa:** endpoint de registro/provisionamiento del dispositivo adoptado y vinculación a `site_id` (pasos 4–6).
 
-Cliente HTTP sugerido: Ktor Client o Retrofit en `data/api/`. Auth: JWT igual que Manager (`Authorization: Bearer`).
+Cliente HTTP: **Ktor Client** en `data/api/` (`AdoptionApi`), base URL en `ApiConfig` (debug → `http://10.0.2.2:3000`, release → `https://api.habitergy.com`). Auth: JWT igual que Manager (`Authorization: Bearer`) cuando se implemente login.
 
 ## 13. Convenciones para agentes
 
 1. **No mezclar con pnpm:** no agregar Link a `pnpm-workspace.yaml` ni `turbo.json` salvo tarea documental explícita.
 2. **Mantener continuidad visual con Manager:** cambios de tokens → actualizar `packages/design-tokens/habitergy-m3.json` + `ui/theme/`.
 3. **ViewModel + StateFlow:** nueva lógica de wizard en `AdoptionViewModel`; Composables solo renderizan estado.
-4. **Mock primero, real después:** extender `MockAdoptionData` o crear interfaz `AdoptionRepository` / `BleScanner` e inyectar implementación mock vs real.
+4. **Checksum device_code en sync:** `domain/DeviceCode.kt` es réplica exacta de `packages/utils/src/shortCode.ts`. Cualquier cambio en el algoritmo debe replicarse en ambos lados. Para I/O nueva, crear un repositorio en `data/` e inyectarlo en el ViewModel.
 5. **Textos en español (es-AR).**
 6. **minSdk 26** — no bajar sin justificación (BLE moderno).
 7. Al agregar paso 3+: incrementar navegación en `AdoptionFlow.kt`, reutilizar `AdoptionScreenScaffold`, mantener `totalSteps = 6` alineado al producto.
@@ -285,7 +277,8 @@ Cliente HTTP sugerido: Ktor Client o Retrofit en `data/api/`. Auth: JWT igual qu
 
 - [ ] BLE real: `BluetoothLeScanner` + filtro Allterco + parseo manufacturer data
 - [ ] QR real: CameraX + ML Kit / ZXing
-- [ ] API lookup: reemplazar mock por `GET /api/devices/code/{deviceCode}`
+- [x] API lookup: `GET /api/adoption/devices/:deviceCode` (paso 1)
+- [x] Validación checksum `device_code` (SH-XXXXC) client + backend
 - [ ] Login partner (JWT) al abrir Link o vía token en deep link
 - [ ] Paso 3: WiFi SSID + contraseña → RPC-over-BLE al Shelly
 - [ ] Pasos 4–6: MQTT config, espera online, asignar alojamiento
@@ -298,9 +291,9 @@ Cliente HTTP sugerido: Ktor Client o Retrofit en `data/api/`. Auth: JWT igual qu
 2. Crear `StepN…Screen.kt` en `ui/adoption/` usando `AdoptionScreenScaffold`.
 3. Extender `AdoptionUiState` y `AdoptionViewModel` con el estado del paso.
 4. Registrar en `AdoptionFlow.kt` (`when (state.currentStep)`).
-5. Si hay I/O: empezar en `data/mock/`, luego `data/` real.
+5. Si hay I/O: crear un repositorio en `data/` (y API en `data/api/`) e inyectarlo en el ViewModel.
 6. Probar en emulador Android Studio.
-7. Actualizar este `AGENTS.md` y `README.md` si cambia el flujo o el estado mock/real.
+7. Actualizar este `AGENTS.md` y `README.md` si cambia el flujo o el estado real/mock.
 
 ## 16. Releases y versionado
 

@@ -28,7 +28,6 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.habitergy.link.R
 import com.habitergy.link.domain.model.AdoptionUiState
@@ -64,18 +63,16 @@ fun Step1IdentifyScreen(
                     imageRes = R.drawable.device_qr,
                     imageContentDescription = "Código QR del controlador en el kit de instalación",
                     title = "Identificá el controlador",
-                    subtitle = "En el kit de instalación vas a encontrar un código único de 5 caracteres " +
-                        "(ej: CX123) junto con un QR. Ingresalo abajo o escanealo con la cámara.",
+                    subtitle = "En el kit de instalación vas a encontrar un código único " +
+                        "(ej: SH-ABCDQ) junto con un QR. Ingresá los 5 caracteres después de SH- " +
+                        "o escanealo con la cámara.",
                 )
 
                 DeviceCodeInput(
                     code = state.deviceCodeInput,
                     onCodeChange = onDeviceCodeChange,
-                    isLookingUp = state.isLookingUp,
-                    lookupError = state.lookupError,
-                    resolvedLabel = state.resolvedDevice?.let { device ->
-                        "${device.model} · ${device.macAddress}"
-                    },
+                    lookupState = state.lookupState,
+                    resolvedModel = state.resolvedDevice?.model,
                 )
 
                 TextButton(
@@ -107,8 +104,6 @@ fun Step1IdentifyScreen(
                     onClick = onProceedWithoutCode,
                     modifier = Modifier.padding(top = 16.dp),
                 )
-
-                MockHintCard(modifier = Modifier.padding(top = 16.dp))
             },
             footer = {
                 HabitergyPrimaryButton(
@@ -172,38 +167,6 @@ private fun NoCodeOptionCard(
                 contentDescription = null,
                 tint = HabitergyColors.IconNormal,
                 modifier = Modifier.size(24.dp),
-            )
-        }
-    }
-}
-
-@Composable
-private fun MockHintCard(modifier: Modifier = Modifier) {
-    Card(
-        modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = HabitergyColors.SurfaceContainerHigh),
-    ) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Icon(
-                    imageVector = Icons.Default.QrCodeScanner,
-                    contentDescription = null,
-                    tint = HabitergyColors.Secondary,
-                )
-                Text(
-                    text = "Modo desarrollo (mock)",
-                    style = MaterialTheme.typography.labelSmall,
-                )
-            }
-            Text(
-                text = "Códigos válidos: CX123, AB123, T3ST1. Cualquier otro código de 5 caracteres fallará.",
-                style = MaterialTheme.typography.bodyMedium,
-                textAlign = TextAlign.Start,
-                modifier = Modifier.padding(top = 8.dp),
             )
         }
     }
