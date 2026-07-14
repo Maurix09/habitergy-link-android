@@ -12,7 +12,7 @@ Este archivo provee contexto esencial para cualquier agente de IA (LLM) que deba
 | **Propósito** | Wizard nativo de adopción de controladores **Shelly 1PM Gen3/Gen4** (BLE, WiFi, provisioning) |
 | **Stack** | Kotlin + Jetpack Compose + Material 3 |
 | **Build** | Gradle ( **no** forma parte de pnpm/Turbo del monorepo ) |
-| **Versión actual** | `0.1.7` — paso **1 real** (lookup API + checksum), paso **2 placeholder** BLE |
+| **Versión actual** | `0.1.8` — paso **1 real** (lookup API + checksum), paso **2 placeholder** BLE |
 | **Play Store (planeado)** | Habitergy Link |
 
 Link reemplaza el wizard web de adopción en Android: acceso nativo a BLE, WiFi y provisioning sin limitaciones de Web Bluetooth ni mixed content.

@@ -12,6 +12,7 @@ import com.habitergy.link.domain.model.DeviceLookupState
 import com.habitergy.link.domain.model.IdentificationMode
 import com.habitergy.link.domain.model.ResolvedDevice
 import com.habitergy.link.domain.model.UNKNOWN_DEVICE_CODE
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -24,42 +25,20 @@ class AdoptionViewModel(
 
     private val _uiState = MutableStateFlow(AdoptionUiState())
     val uiState: StateFlow<AdoptionUiState> = _uiState.asStateFlow()
+    private var lookupJob: Job? = null
+    private var activeLookupSuffix: String? = null
 
     /**
-     * Actualiza el sufijo tipeado sin disparar validación. Se invoca mientras el
-     * usuario completa los recuadros anteriores al último; resetea el estado de
-     * lookup para que no quede un resultado obsoleto.
+     * Mantiene una única fuente de verdad para el código ingresado. Si el cambio
+     * deja el sufijo completo (5 caracteres), vuelve a validar y relanza el
+     * lookup aunque el usuario haya corregido un recuadro intermedio.
      */
     fun onDeviceCodeChange(value: String) {
-        val sanitized = DeviceCode.normalizeSuffix(value).take(DEVICE_CODE_LENGTH)
-        _uiState.update {
-            it.copy(
-                deviceCodeInput = sanitized,
-                identificationMode = IdentificationMode.WithCode,
-                resolvedDevice = null,
-                lookupState = DeviceLookupState.Idle,
-            )
-        }
+        updateDeviceCode(value)
     }
 
-    /**
-     * Se invoca al escribir el carácter del último recuadro (o al pegar un código
-     * que lo completa). Recién ahí corre la validación local de checksum y, si
-     * pasa, el lookup en la base de datos.
-     */
     fun onDeviceCodeComplete(value: String) {
-        val sanitized = DeviceCode.normalizeSuffix(value).take(DEVICE_CODE_LENGTH)
-        _uiState.update {
-            it.copy(
-                deviceCodeInput = sanitized,
-                identificationMode = IdentificationMode.WithCode,
-                resolvedDevice = null,
-                lookupState = DeviceLookupState.Idle,
-            )
-        }
-        if (sanitized.length == DEVICE_CODE_LENGTH && sanitized != UNKNOWN_DEVICE_CODE) {
-            resolveDeviceCode(sanitized)
-        }
+        updateDeviceCode(value)
     }
 
     fun onScanQrClick() {
@@ -67,6 +46,7 @@ class AdoptionViewModel(
     }
 
     fun proceedWithoutKnownCode() {
+        cancelLookup()
         _uiState.update {
             it.copy(
                 deviceCodeInput = UNKNOWN_DEVICE_CODE,
@@ -84,6 +64,24 @@ class AdoptionViewModel(
         }
     }
 
+    private fun updateDeviceCode(value: String) {
+        val sanitized = DeviceCode.normalizeSuffix(value).take(DEVICE_CODE_LENGTH)
+        cancelLookup()
+
+        _uiState.update {
+            it.copy(
+                deviceCodeInput = sanitized,
+                identificationMode = IdentificationMode.WithCode,
+                resolvedDevice = null,
+                lookupState = DeviceLookupState.Idle,
+            )
+        }
+
+        if (sanitized.length == DEVICE_CODE_LENGTH && sanitized != UNKNOWN_DEVICE_CODE) {
+            resolveDeviceCode(sanitized)
+        }
+    }
+
     private fun resolveDeviceCode(suffix: String) {
         if (!DeviceCode.isValidSuffix(suffix)) {
             _uiState.update {
@@ -93,11 +91,15 @@ class AdoptionViewModel(
         }
 
         val fullCode = DeviceCode.fullCode(suffix)
+        activeLookupSuffix = suffix
 
-        viewModelScope.launch {
+        lookupJob = viewModelScope.launch {
             _uiState.update { it.copy(lookupState = DeviceLookupState.Looking, resolvedDevice = null) }
 
-            when (val result = repository.lookup(fullCode)) {
+            val result = repository.lookup(fullCode)
+            if (!shouldApplyLookupResult(suffix)) return@launch
+
+            when (result) {
                 is AdoptionLookupResult.Found -> {
                     when (result.status) {
                         STATUS_AVAILABLE -> _uiState.update {
@@ -125,10 +127,15 @@ class AdoptionViewModel(
                     it.copy(lookupState = DeviceLookupState.NetworkError, resolvedDevice = null)
                 }
             }
+
+            if (activeLookupSuffix == suffix) {
+                lookupJob = null
+            }
         }
     }
 
     private fun navigateToStep2() {
+        cancelLookup()
         _uiState.update {
             it.copy(
                 currentStep = 2,
@@ -142,6 +149,7 @@ class AdoptionViewModel(
     }
 
     fun goBackToStep1() {
+        cancelLookup()
         _uiState.update {
             it.copy(
                 currentStep = 1,
@@ -162,6 +170,19 @@ class AdoptionViewModel(
 
     fun selectDevice(deviceId: String) {
         _uiState.update { it.copy(selectedDeviceId = deviceId) }
+    }
+
+    private fun cancelLookup() {
+        lookupJob?.cancel()
+        lookupJob = null
+        activeLookupSuffix = null
+    }
+
+    private fun shouldApplyLookupResult(suffix: String): Boolean {
+        val state = _uiState.value
+        return activeLookupSuffix == suffix &&
+            state.identificationMode == IdentificationMode.WithCode &&
+            state.deviceCodeInput == suffix
     }
 
     private companion object {

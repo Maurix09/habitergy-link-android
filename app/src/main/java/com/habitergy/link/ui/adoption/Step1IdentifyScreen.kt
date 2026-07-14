@@ -27,6 +27,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import com.habitergy.link.R
@@ -59,6 +60,7 @@ fun Step1IdentifyScreen(
             currentStep = state.currentStep,
             totalSteps = state.totalSteps,
             onBack = onBack,
+            showBackButton = false,
             content = {
                 OnboardingHeroSection(
                     imageRes = R.drawable.device_qr,
@@ -66,7 +68,7 @@ fun Step1IdentifyScreen(
                     title = "Identificá el controlador",
                     subtitle = "En el kit de instalación vas a encontrar un código único " +
                         "(ej: SH-KX67W) junto con un QR. Ingresá los 5 caracteres después de SH- " +
-                        "o escanealo con la cámara.",
+                        "para verificarlo o escaneá el código con la cámara.",
                 )
 
                 DeviceCodeInput(
@@ -78,9 +80,10 @@ fun Step1IdentifyScreen(
                 )
 
                 TextButton(
+                    enabled = !state.isLookingUp,
                     onClick = {
                         scope.launch {
-                            snackbarHostState.showSnackbar("Coming soon")
+                            snackbarHostState.showSnackbar("Escaneo QR: proximamente")
                         }
                         onScanQrClick()
                     },
@@ -104,6 +107,7 @@ fun Step1IdentifyScreen(
 
                 NoCodeOptionCard(
                     onClick = onProceedWithoutCode,
+                    enabled = !state.isLookingUp,
                     modifier = Modifier.padding(top = 16.dp),
                 )
             },
@@ -121,12 +125,15 @@ fun Step1IdentifyScreen(
 @Composable
 private fun NoCodeOptionCard(
     onClick: () -> Unit,
+    enabled: Boolean,
     modifier: Modifier = Modifier,
 ) {
     Card(
         modifier = modifier
             .fillMaxWidth()
+            .alpha(if (enabled) 1f else 0.6f)
             .clickable(
+                enabled = enabled,
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,
                 onClick = onClick,
@@ -158,8 +165,8 @@ private fun NoCodeOptionCard(
                     color = HabitergyColors.TextTitle,
                 )
                 Text(
-                    text = "Si perdiste el código o querés adoptar un controlador Shelly compatible " +
-                        "con Habitergy, tocá aquí.",
+                    text = "Si no tenés el código, seguí por Bluetooth en el siguiente paso para " +
+                        "identificar el controlador compatible.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = HabitergyColors.TextPrimary,
                 )

@@ -37,6 +37,7 @@ fun AdoptionScreenScaffold(
     currentStep: Int,
     totalSteps: Int,
     onBack: () -> Unit,
+    showBackButton: Boolean = true,
     modifier: Modifier = Modifier,
     content: @Composable () -> Unit,
     footer: @Composable () -> Unit,
@@ -54,6 +55,7 @@ fun AdoptionScreenScaffold(
             currentStep = currentStep,
             totalSteps = totalSteps,
             onBack = onBack,
+            showBackButton = showBackButton,
         )
 
         Column(
@@ -83,6 +85,7 @@ fun AdoptionStepHeader(
     currentStep: Int,
     totalSteps: Int,
     onBack: () -> Unit,
+    showBackButton: Boolean = true,
     modifier: Modifier = Modifier,
 ) {
     Box(
@@ -91,15 +94,19 @@ fun AdoptionStepHeader(
             .padding(top = 48.dp, bottom = 8.dp)
             .padding(horizontal = 16.dp),
     ) {
-        IconButton(
-            onClick = onBack,
-            modifier = Modifier.align(Alignment.CenterStart),
-        ) {
-            Icon(
-                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                contentDescription = "Volver",
-                tint = HabitergyColors.Primary,
-            )
+        if (showBackButton) {
+            IconButton(
+                onClick = onBack,
+                modifier = Modifier.align(Alignment.CenterStart),
+            ) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = "Volver",
+                    tint = HabitergyColors.Primary,
+                )
+            }
+        } else {
+            Spacer(modifier = Modifier.size(40.dp).align(Alignment.CenterStart))
         }
 
         Column(

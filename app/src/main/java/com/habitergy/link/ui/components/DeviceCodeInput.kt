@@ -1,17 +1,16 @@
 package com.habitergy.link.ui.components
 
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.CircularProgressIndicator
@@ -20,24 +19,31 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
-import androidx.compose.ui.geometry.CornerRadius
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.drawscope.rotate
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.error
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.habitergy.link.domain.DeviceCode
@@ -54,25 +60,39 @@ fun DeviceCodeInput(
     resolvedModel: String?,
     modifier: Modifier = Modifier,
 ) {
-    val focusRequesters = remember { List(DEVICE_CODE_LENGTH) { FocusRequester() } }
-    val focusedSlots = remember { mutableStateListOf(*Array(DEVICE_CODE_LENGTH) { false }) }
-    val currentOnCodeChange by rememberUpdatedState(onCodeChange)
-    val currentOnCodeComplete by rememberUpdatedState(onCodeComplete)
-
-    // Modelo de slots controlado: preserva posiciones (incluye huecos) para que
-    // borrar un recuadro intermedio no reordene los siguientes.
-    val slots = remember {
-        mutableStateListOf<Char?>(*Array(DEVICE_CODE_LENGTH) { code.getOrNull(it) })
+    val normalizedCode = normalizeCode(code)
+    val currentOnCodeChange by rememberUpdatedState(newValue = onCodeChange)
+    val currentOnCodeComplete by rememberUpdatedState(newValue = onCodeComplete)
+    val focusRequester = remember { FocusRequester() }
+    val messageUi = remember(lookupState, resolvedModel) {
+        lookupMessageUi(lookupState = lookupState, resolvedModel = resolvedModel)
+    }
+    var isFocused by remember { mutableStateOf(false) }
+    var fieldValue by rememberSaveable(stateSaver = TextFieldValue.Saver) {
+        mutableStateOf(
+            TextFieldValue(
+                text = normalizedCode,
+                selection = TextRange(normalizedCode.length),
+            ),
+        )
     }
 
-    // Resync sólo cuando el VM limpia el código desde afuera (p. ej. volver al paso 1).
-    LaunchedEffect(code) {
-        if (code.isEmpty()) repeat(DEVICE_CODE_LENGTH) { slots[it] = null }
+    LaunchedEffect(normalizedCode) {
+        val selectionStart = fieldValue.selection.start.coerceIn(0, normalizedCode.length)
+        val selectionEnd = fieldValue.selection.end.coerceIn(0, normalizedCode.length)
+        if (fieldValue.text != normalizedCode ||
+            fieldValue.selection.start != selectionStart ||
+            fieldValue.selection.end != selectionEnd
+        ) {
+            fieldValue = TextFieldValue(
+                text = normalizedCode,
+                selection = TextRange(selectionStart, selectionEnd),
+            )
+        }
     }
 
-    // Auto-foco del primer recuadro al entrar a la pantalla.
     LaunchedEffect(Unit) {
-        runCatching { focusRequesters[0].requestFocus() }
+        runCatching { focusRequester.requestFocus() }
     }
 
     val isLooking = lookupState == DeviceLookupState.Looking
@@ -82,100 +102,105 @@ fun DeviceCodeInput(
         DeviceLookupState.Unavailable,
         DeviceLookupState.NotFound,
         DeviceLookupState.NetworkError -> HabitergyColors.Error
-        DeviceLookupState.Available -> HabitergyColors.Primary
+        DeviceLookupState.Available,
         DeviceLookupState.Looking -> HabitergyColors.Primary
         DeviceLookupState.Idle -> null
     }
+    val focusedSlotIndex = if (isFocused) fieldValue.focusedSlotIndex() else -1
 
-    val transition = rememberInfiniteTransition(label = "codeBoxBorder")
-    val angle by transition.animateFloat(
-        initialValue = 0f,
-        targetValue = 360f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 1400, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart,
+    BasicTextField(
+        value = fieldValue,
+        onValueChange = { incoming ->
+            val nextValue = reduceCodeEdit(previous = fieldValue, incoming = incoming)
+            fieldValue = nextValue
+            if (nextValue.text.length == DEVICE_CODE_LENGTH) {
+                currentOnCodeComplete(nextValue.text)
+            } else {
+                currentOnCodeChange(nextValue.text)
+            }
+        },
+        modifier = modifier
+            .fillMaxWidth()
+            .focusRequester(focusRequester)
+            .onFocusChanged { isFocused = it.isFocused }
+            .semantics {
+                contentDescription = "Código del controlador"
+                stateDescription = buildString {
+                    append("Prefijo SH. ")
+                    append("Completaste ${normalizedCode.length} de $DEVICE_CODE_LENGTH caracteres. ")
+                    append(messageUi.text)
+                }
+                if (messageUi.isError) {
+                    error(messageUi.text)
+                }
+            },
+        singleLine = true,
+        keyboardOptions = KeyboardOptions(
+            capitalization = KeyboardCapitalization.Characters,
+            keyboardType = KeyboardType.Ascii,
+            imeAction = ImeAction.Done,
         ),
-        label = "codeBoxAngle",
-    )
+        textStyle = MaterialTheme.typography.titleLarge.copy(color = Color.Transparent),
+        cursorBrush = SolidColor(Color.Transparent),
+        decorationBox = {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clearAndSetSemantics {},
+                    horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterHorizontally),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = "SH-",
+                        style = MaterialTheme.typography.titleLarge,
+                        color = HabitergyColors.TextTitle,
+                    )
 
-    val focusedIndex = focusedSlots.indexOf(true)
-
-    Column(
-        modifier = modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                text = "SH-",
-                style = MaterialTheme.typography.titleLarge,
-                color = HabitergyColors.TextTitle,
-            )
-
-            repeat(DEVICE_CODE_LENGTH) { index ->
-                CodeCharBox(
-                    value = slots[index]?.toString() ?: "",
-                    isFocused = focusedIndex == index,
-                    stateColor = stateColor,
-                    angle = angle,
-                    focusRequester = focusRequesters[index],
-                    imeAction = if (index == DEVICE_CODE_LENGTH - 1) ImeAction.Done else ImeAction.Next,
-                    onValueChange = { raw ->
-                        handleBoxInput(
-                            index = index,
-                            raw = raw,
-                            slots = slots,
-                            onCodeChange = currentOnCodeChange,
-                            onCodeComplete = currentOnCodeComplete,
-                            focusRequesters = focusRequesters,
+                    repeat(DEVICE_CODE_LENGTH) { index ->
+                        CodeCharBox(
+                            value = normalizedCode.getOrNull(index)?.toString().orEmpty(),
+                            isFocused = focusedSlotIndex == index,
+                            stateColor = stateColor,
+                            onClick = {
+                                fieldValue = fieldValue.copy(
+                                    selection = selectionForSlot(index = index, codeLength = normalizedCode.length),
+                                )
+                                runCatching { focusRequester.requestFocus() }
+                            },
                         )
-                    },
-                    onFocusChanged = { focused -> focusedSlots[index] = focused },
-                )
-            }
+                    }
 
-            if (isLooking) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(20.dp),
-                    strokeWidth = 2.dp,
-                    color = HabitergyColors.Primary,
-                )
-            }
-        }
+                    if (isLooking) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(20.dp),
+                            strokeWidth = 2.dp,
+                            color = HabitergyColors.Primary,
+                        )
+                    }
+                }
 
-        LookupMessage(lookupState = lookupState, resolvedModel = resolvedModel)
-    }
+                LookupMessage(messageUi = messageUi)
+            }
+        },
+    )
 }
 
 @Composable
 private fun LookupMessage(
-    lookupState: DeviceLookupState,
-    resolvedModel: String?,
+    messageUi: LookupMessageUi,
     modifier: Modifier = Modifier,
 ) {
-    val (text, color) = when (lookupState) {
-        DeviceLookupState.Invalid -> "Código inválido" to HabitergyColors.Error
-        DeviceLookupState.Available ->
-            "Controlador encontrado: ${resolvedModel ?: ""}".trimEnd() to HabitergyColors.Primary
-        DeviceLookupState.NotFound ->
-            "No encontramos un controlador con ese código" to HabitergyColors.Error
-        DeviceLookupState.Assigned ->
-            "Este controlador ya está asignado" to HabitergyColors.Error
-        DeviceLookupState.Unavailable ->
-            "Este controlador no está disponible para adoptar" to HabitergyColors.Error
-        DeviceLookupState.NetworkError ->
-            "No pudimos verificar el código. Revisá tu conexión." to HabitergyColors.Error
-        DeviceLookupState.Looking, DeviceLookupState.Idle -> return
-    }
-
     Text(
-        text = text,
-        color = color,
+        text = messageUi.text,
+        color = messageUi.color,
         style = MaterialTheme.typography.bodyMedium,
-        modifier = modifier.fillMaxWidth(),
+        modifier = modifier
+            .fillMaxWidth()
+            .semantics { liveRegion = LiveRegionMode.Polite },
         textAlign = TextAlign.Center,
     )
 }
@@ -185,147 +210,153 @@ private fun CodeCharBox(
     value: String,
     isFocused: Boolean,
     stateColor: Color?,
-    angle: Float,
-    focusRequester: FocusRequester,
-    imeAction: ImeAction,
-    onValueChange: (String) -> Unit,
-    onFocusChanged: (Boolean) -> Unit,
+    onClick: () -> Unit,
 ) {
+    val shape = RoundedCornerShape(20.dp)
     val focusColor = stateColor ?: HabitergyColors.Primary
-    val staticColor = when {
+    val borderColor = when {
+        isFocused -> focusColor
         stateColor != null -> stateColor
         value.isNotEmpty() -> HabitergyColors.Primary
         else -> HabitergyColors.BorderNormal
     }
+    val borderWidth = if (isFocused) 2.dp else 1.5.dp
 
     Box(
         modifier = Modifier
-            .size(48.dp)
-            .drawBehind {
-                val cornerPx = 12.dp.toPx()
-                if (isFocused) {
-                    val strokeWidth = 2.dp.toPx()
-                    // Gradiente que rota recorriendo el perímetro: el segmento
-                    // brillante viaja alrededor del borde del recuadro con foco.
-                    rotate(angle) {
-                        drawRoundRect(
-                            brush = Brush.sweepGradient(
-                                colors = listOf(
-                                    focusColor,
-                                    focusColor.copy(alpha = 0.15f),
-                                    focusColor,
-                                ),
-                                center = Offset(size.width / 2f, size.height / 2f),
-                            ),
-                            style = Stroke(width = strokeWidth),
-                            cornerRadius = CornerRadius(cornerPx),
-                        )
-                    }
-                } else {
-                    drawRoundRect(
-                        color = staticColor,
-                        style = Stroke(width = 1.5.dp.toPx()),
-                        cornerRadius = CornerRadius(cornerPx),
-                    )
-                }
-            },
+            .size(52.dp)
+            .clip(shape)
+            .background(HabitergyColors.Card)
+            .border(width = borderWidth, color = borderColor, shape = shape)
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onClick,
+            ),
         contentAlignment = Alignment.Center,
     ) {
-        BasicTextField(
-            value = value,
-            onValueChange = onValueChange,
-            modifier = Modifier
-                .fillMaxWidth()
-                .onFocusChanged { onFocusChanged(it.isFocused) }
-                .focusRequester(focusRequester),
-            singleLine = true,
-            textStyle = MaterialTheme.typography.titleLarge.copy(
-                textAlign = TextAlign.Center,
-                color = HabitergyColors.TextTitle,
-            ),
-            // Sin cursor visible dentro del recuadro: el foco se indica con el borde.
-            cursorBrush = SolidColor(Color.Transparent),
-            keyboardOptions = KeyboardOptions(
-                capitalization = KeyboardCapitalization.Characters,
-                imeAction = imeAction,
-            ),
+        Text(
+            text = value,
+            style = MaterialTheme.typography.titleLarge,
+            color = HabitergyColors.TextTitle,
+            textAlign = TextAlign.Center,
         )
     }
 }
 
-/**
- * Lógica de un recuadro. Cada caja acepta un solo carácter: al tipear reemplaza
- * el contenido del slot actual y avanza el foco sin tocar el siguiente. El
- * backspace borra el slot actual si tiene contenido, o retrocede al anterior si
- * está vacío. El pegado rellena varios slots desde el actual. La validación
- * (checksum + lookup) se dispara sólo cuando el carácter cae en el último slot.
- */
-private fun handleBoxInput(
-    index: Int,
-    raw: String,
-    slots: MutableList<Char?>,
-    onCodeChange: (String) -> Unit,
-    onCodeComplete: (String) -> Unit,
-    focusRequesters: List<FocusRequester>,
-) {
-    val sanitized = raw.uppercase().filter { it in DeviceCode.ALPHABET }
-    val oldChar = slots.getOrNull(index)
-    val lastIndex = DEVICE_CODE_LENGTH - 1
+private data class LookupMessageUi(
+    val text: String,
+    val color: Color,
+    val isError: Boolean = false,
+)
 
-    when {
-        sanitized.isEmpty() -> {
-            if (oldChar != null) {
-                // Slot actual con contenido: lo borra y se queda aquí.
-                slots[index] = null
-                onCodeChange(denseCode(slots))
-            } else if (index > 0) {
-                // Slot actual vacío: retrocede y borra el anterior.
-                slots[index - 1] = null
-                onCodeChange(denseCode(slots))
-                runCatching { focusRequesters[index - 1].requestFocus() }
-            }
-        }
-
-        sanitized.length == 1 -> {
-            slots[index] = sanitized[0]
-            if (index == lastIndex) {
-                onCodeComplete(denseCode(slots))
-            } else {
-                onCodeChange(denseCode(slots))
-                runCatching { focusRequesters[index + 1].requestFocus() }
-            }
-        }
-
-        else -> {
-            if (oldChar == null) {
-                // Pegado en slot vacío: rellena desde el actual hacia adelante.
-                var lastFilled = index
-                sanitized.forEachIndexed { offset, ch ->
-                    val target = index + offset
-                    if (target < DEVICE_CODE_LENGTH) {
-                        slots[target] = ch
-                        lastFilled = target
-                    }
-                }
-                if (lastFilled == lastIndex && denseCode(slots).length == DEVICE_CODE_LENGTH) {
-                    onCodeComplete(denseCode(slots))
-                } else {
-                    onCodeChange(denseCode(slots))
-                    val next = (lastFilled + 1).coerceAtMost(lastIndex)
-                    runCatching { focusRequesters[next].requestFocus() }
-                }
-            } else {
-                // Tipeo sobre un slot ya escrito: reemplaza con el último char y avanza.
-                slots[index] = sanitized.last()
-                if (index == lastIndex) {
-                    onCodeComplete(denseCode(slots))
-                } else {
-                    onCodeChange(denseCode(slots))
-                    runCatching { focusRequesters[index + 1].requestFocus() }
-                }
-            }
-        }
-    }
+private fun lookupMessageUi(
+    lookupState: DeviceLookupState,
+    resolvedModel: String?,
+): LookupMessageUi = when (lookupState) {
+    DeviceLookupState.Idle -> LookupMessageUi(
+        text = "Ingresá los 5 caracteres para verificar el controlador.",
+        color = HabitergyColors.TextSecondary,
+    )
+    DeviceLookupState.Looking -> LookupMessageUi(
+        text = "Verificando el código del controlador...",
+        color = HabitergyColors.Primary,
+    )
+    DeviceLookupState.Available -> LookupMessageUi(
+        text = resolvedModel
+            ?.let { "Controlador encontrado: $it. Ya podés continuar." }
+            ?: "Controlador encontrado. Ya podés continuar.",
+        color = HabitergyColors.Primary,
+    )
+    DeviceLookupState.Invalid -> LookupMessageUi(
+        text = "El código no es válido. Revisá los 5 caracteres e intentá de nuevo.",
+        color = HabitergyColors.Error,
+        isError = true,
+    )
+    DeviceLookupState.NotFound -> LookupMessageUi(
+        text = "El código es válido, pero no encontramos un controlador con ese identificador.",
+        color = HabitergyColors.Error,
+        isError = true,
+    )
+    DeviceLookupState.Assigned -> LookupMessageUi(
+        text = "Encontramos el controlador, pero ya está asignado a otro alojamiento.",
+        color = HabitergyColors.Error,
+        isError = true,
+    )
+    DeviceLookupState.Unavailable -> LookupMessageUi(
+        text = "Encontramos el controlador, pero su estado actual no permite adoptarlo.",
+        color = HabitergyColors.Error,
+        isError = true,
+    )
+    DeviceLookupState.NetworkError -> LookupMessageUi(
+        text = "No pudimos verificar el código por un problema de conexión. Probá otra vez.",
+        color = HabitergyColors.Error,
+        isError = true,
+    )
 }
 
-private fun denseCode(slots: List<Char?>): String = slots.filterNotNull().joinToString("")
+private fun normalizeCode(raw: String): String =
+    sanitizeRawInput(raw).take(DEVICE_CODE_LENGTH)
+
+private fun sanitizeRawInput(raw: String): String =
+    raw.uppercase().filter { it in DeviceCode.ALPHABET }
+
+private fun selectionForSlot(index: Int, codeLength: Int): TextRange = when {
+    index < codeLength -> TextRange(index, (index + 1).coerceAtMost(codeLength))
+    else -> TextRange(codeLength)
+}
+
+private fun TextFieldValue.focusedSlotIndex(): Int {
+    val slot = when {
+        selection.collapsed -> selection.start
+        else -> selection.start
+    }.coerceAtMost(DEVICE_CODE_LENGTH - 1)
+    return if (text.isEmpty()) 0 else slot
+}
+
+private fun reduceCodeEdit(
+    previous: TextFieldValue,
+    incoming: TextFieldValue,
+): TextFieldValue {
+    val previousText = normalizeCode(previous.text)
+    val incomingText = sanitizeRawInput(incoming.text)
+
+    if (incomingText.length <= DEVICE_CODE_LENGTH) {
+        val selectionStart = incoming.selection.start.coerceIn(0, incomingText.length)
+        val selectionEnd = incoming.selection.end.coerceIn(0, incomingText.length)
+        return TextFieldValue(
+            text = incomingText,
+            selection = TextRange(selectionStart, selectionEnd),
+        )
+    }
+
+    val selectionStart = previous.selection.start.coerceIn(0, previousText.length)
+    val selectionEnd = previous.selection.end.coerceIn(selectionStart, previousText.length)
+    val prefix = previousText.take(selectionStart)
+    val suffix = previousText.drop(selectionEnd)
+    val suffixStart = incomingText.length - suffix.length
+    val suffixMatches = suffix.isEmpty() || (suffixStart >= 0 && incomingText.substring(suffixStart) == suffix)
+
+    if (incomingText.startsWith(prefix) && suffixMatches && suffixStart >= prefix.length) {
+        val inserted = incomingText.substring(prefix.length, suffixStart)
+        val nextText = if (inserted.length >= DEVICE_CODE_LENGTH) {
+            inserted.take(DEVICE_CODE_LENGTH)
+        } else {
+            (prefix + inserted + suffix).take(DEVICE_CODE_LENGTH)
+        }
+        val caret = if (inserted.length >= DEVICE_CODE_LENGTH) {
+            DEVICE_CODE_LENGTH
+        } else {
+            (prefix.length + inserted.length).coerceIn(0, nextText.length)
+        }
+        return TextFieldValue(
+            text = nextText,
+            selection = TextRange(caret),
+        )
+    }
+
+    return TextFieldValue(
+        text = incomingText.take(DEVICE_CODE_LENGTH),
+        selection = TextRange(incoming.selection.end.coerceIn(0, DEVICE_CODE_LENGTH)),
+    )
+}

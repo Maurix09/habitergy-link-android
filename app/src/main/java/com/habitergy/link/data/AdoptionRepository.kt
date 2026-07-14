@@ -2,6 +2,7 @@ package com.habitergy.link.data
 
 import com.habitergy.link.data.api.AdoptionApi
 import io.ktor.http.isSuccess
+import kotlinx.coroutines.CancellationException
 
 /**
  * Resultado del lookup de adopción. El ViewModel mapea esto al estado de UI
@@ -41,6 +42,8 @@ class AdoptionRepository(
             response.status.value == 404 -> AdoptionLookupResult.NotFound
             else -> AdoptionLookupResult.NetworkError
         }
+    } catch (exception: CancellationException) {
+        throw exception
     } catch (_: Exception) {
         AdoptionLookupResult.NetworkError
     }
