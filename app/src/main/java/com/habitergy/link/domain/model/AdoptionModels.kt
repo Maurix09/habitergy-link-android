@@ -40,7 +40,7 @@ data class ResolvedDevice(
     val model: String,
 )
 
-/** Controlador Shelly detectado por escaneo BLE (mock o real). */
+/** Controlador Shelly detectado por escaneo BLE. */
 data class ScannedShellyDevice(
     val id: String,
     val name: String,
@@ -55,14 +55,34 @@ data class ScannedShellyDevice(
         }
 }
 
+/** Fases del paso 2 (escaneo BLE). */
 enum class BleScanPhase {
+    /** Estado inicial al entrar al paso; la UI dispara la verificación. */
     Idle,
+
+    /** Faltan permisos de runtime para escanear. */
+    PermissionRequired,
+
+    /** El adaptador Bluetooth está apagado. */
+    BluetoothOff,
+
+    /** Escaneando controladores. */
     Scanning,
+
+    /** Se encontró el controlador cuya MAC coincide con la del paso 1. */
     Matched,
-    SelectDevice,
+
+    /** Sin código: se muestra la lista de Shelly cercanos para elegir. */
+    DeviceList,
+
+    /** Con código: terminó el escaneo sin encontrar la MAC objetivo. */
+    NotFound,
+
+    /** Sin código: terminó el escaneo sin ningún Shelly cercano. */
     Empty,
+
+    /** Error de Bluetooth (no soportado, permiso denegado, fallo del escáner). */
     Error,
-    NotImplemented,
 }
 
 data class AdoptionUiState(

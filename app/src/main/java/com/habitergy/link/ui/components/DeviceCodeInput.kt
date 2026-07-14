@@ -7,8 +7,11 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -32,6 +35,8 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
@@ -51,6 +56,7 @@ import com.habitergy.link.domain.model.DEVICE_CODE_LENGTH
 import com.habitergy.link.domain.model.DeviceLookupState
 import com.habitergy.link.ui.theme.HabitergyColors
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun DeviceCodeInput(
     code: String,
@@ -64,10 +70,13 @@ fun DeviceCodeInput(
     val currentOnCodeChange by rememberUpdatedState(newValue = onCodeChange)
     val currentOnCodeComplete by rememberUpdatedState(newValue = onCodeComplete)
     val focusRequester = remember { FocusRequester() }
+    val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
     val messageUi = remember(lookupState, resolvedModel) {
         lookupMessageUi(lookupState = lookupState, resolvedModel = resolvedModel)
     }
     var isFocused by remember { mutableStateOf(false) }
+    val isImeVisible = WindowInsets.isImeVisible
     var fieldValue by rememberSaveable(stateSaver = TextFieldValue.Saver) {
         mutableStateOf(
             TextFieldValue(
@@ -91,8 +100,13 @@ fun DeviceCodeInput(
         }
     }
 
-    LaunchedEffect(Unit) {
-        runCatching { focusRequester.requestFocus() }
+    // Si el usuario oculta el teclado (gesto/botón atrás), soltamos el foco del
+    // recuadro para que deje de estar resaltado. Al volver a tocar un recuadro
+    // se recupera el foco y se muestra el teclado de nuevo.
+    LaunchedEffect(isImeVisible) {
+        if (!isImeVisible && isFocused) {
+            focusManager.clearFocus()
+        }
     }
 
     val isLooking = lookupState == DeviceLookupState.Looking
@@ -164,6 +178,7 @@ fun DeviceCodeInput(
                                     selection = selectionForSlot(index = index, codeLength = normalizedCode.length),
                                 )
                                 runCatching { focusRequester.requestFocus() }
+                                keyboardController?.show()
                             },
                         )
                     }

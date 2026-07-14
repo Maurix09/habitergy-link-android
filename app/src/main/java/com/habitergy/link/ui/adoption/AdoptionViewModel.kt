@@ -1,9 +1,13 @@
 package com.habitergy.link.ui.adoption
 
-import androidx.lifecycle.ViewModel
+import android.app.Application
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.habitergy.link.data.AdoptionLookupResult
 import com.habitergy.link.data.AdoptionRepository
+import com.habitergy.link.data.ble.BlePermissions
+import com.habitergy.link.data.ble.ShellyBleScanner
+import com.habitergy.link.data.ble.normalizeMac
 import com.habitergy.link.domain.DeviceCode
 import com.habitergy.link.domain.model.AdoptionUiState
 import com.habitergy.link.domain.model.BleScanPhase
@@ -11,22 +15,30 @@ import com.habitergy.link.domain.model.DEVICE_CODE_LENGTH
 import com.habitergy.link.domain.model.DeviceLookupState
 import com.habitergy.link.domain.model.IdentificationMode
 import com.habitergy.link.domain.model.ResolvedDevice
+import com.habitergy.link.domain.model.ScannedShellyDevice
 import com.habitergy.link.domain.model.UNKNOWN_DEVICE_CODE
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.firstOrNull
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 class AdoptionViewModel(
-    private val repository: AdoptionRepository = AdoptionRepository(),
-) : ViewModel() {
+    application: Application,
+) : AndroidViewModel(application) {
+
+    private val repository: AdoptionRepository = AdoptionRepository()
+    private val bleScanner: ShellyBleScanner = ShellyBleScanner(application)
 
     private val _uiState = MutableStateFlow(AdoptionUiState())
     val uiState: StateFlow<AdoptionUiState> = _uiState.asStateFlow()
     private var lookupJob: Job? = null
     private var activeLookupSuffix: String? = null
+    private var scanJob: Job? = null
 
     /**
      * Mantiene una única fuente de verdad para el código ingresado. Si el cambio
@@ -136,10 +148,11 @@ class AdoptionViewModel(
 
     private fun navigateToStep2() {
         cancelLookup()
+        cancelScan()
         _uiState.update {
             it.copy(
                 currentStep = 2,
-                bleScanPhase = BleScanPhase.NotImplemented,
+                bleScanPhase = BleScanPhase.Idle,
                 scannedDevices = emptyList(),
                 matchedDevice = null,
                 selectedDeviceId = null,
@@ -150,6 +163,7 @@ class AdoptionViewModel(
 
     fun goBackToStep1() {
         cancelLookup()
+        cancelScan()
         _uiState.update {
             it.copy(
                 currentStep = 1,
@@ -164,12 +178,117 @@ class AdoptionViewModel(
         }
     }
 
+    /**
+     * Verifica las precondiciones del escaneo BLE (soporte, permisos, adaptador
+     * encendido) y, si todo está listo, arranca el escaneo. La UI la llama al
+     * entrar al paso 2 y tras conceder permisos o encender el Bluetooth.
+     */
+    fun refreshBleReadiness() {
+        when {
+            !bleScanner.isSupported() -> updateBlePhase(
+                BleScanPhase.Error,
+                "Este dispositivo no es compatible con Bluetooth LE.",
+            )
+            !BlePermissions.allGranted(getApplication()) ->
+                updateBlePhase(BleScanPhase.PermissionRequired)
+            !bleScanner.isEnabled() ->
+                updateBlePhase(BleScanPhase.BluetoothOff)
+            else -> startBleScan()
+        }
+    }
+
     fun retryBleScan() {
-        // BLE real pendiente — sin acción por ahora.
+        refreshBleReadiness()
     }
 
     fun selectDevice(deviceId: String) {
         _uiState.update { it.copy(selectedDeviceId = deviceId) }
+    }
+
+    private fun startBleScan() {
+        cancelScan()
+        val target = _uiState.value.targetMacAddress
+            ?.let { normalizeMac(it) }
+            ?.takeIf { it.length >= MIN_MAC_HEX }
+
+        _uiState.update {
+            it.copy(
+                bleScanPhase = BleScanPhase.Scanning,
+                scannedDevices = emptyList(),
+                matchedDevice = null,
+                selectedDeviceId = null,
+                bleErrorMessage = null,
+            )
+        }
+
+        scanJob = viewModelScope.launch {
+            val found = LinkedHashMap<String, ScannedShellyDevice>()
+            try {
+                val matched = withTimeoutOrNull(SCAN_TIMEOUT_MS) {
+                    bleScanner.scan()
+                        .onEach { device ->
+                            found[device.id] = device
+                            if (target == null) {
+                                _uiState.update { state ->
+                                    state.copy(scannedDevices = found.values.sortedByDescending { it.rssi })
+                                }
+                            }
+                        }
+                        .firstOrNull { device -> target != null && macMatches(device, target) }
+                }
+
+                when {
+                    target != null && matched != null -> _uiState.update {
+                        it.copy(
+                            bleScanPhase = BleScanPhase.Matched,
+                            matchedDevice = matched,
+                            scannedDevices = listOf(matched),
+                        )
+                    }
+                    target != null -> _uiState.update { it.copy(bleScanPhase = BleScanPhase.NotFound) }
+                    found.isNotEmpty() -> _uiState.update {
+                        it.copy(
+                            bleScanPhase = BleScanPhase.DeviceList,
+                            scannedDevices = found.values.sortedByDescending { device -> device.rssi },
+                        )
+                    }
+                    else -> _uiState.update { it.copy(bleScanPhase = BleScanPhase.Empty) }
+                }
+            } catch (error: Exception) {
+                if (error is kotlinx.coroutines.CancellationException) throw error
+                _uiState.update {
+                    it.copy(
+                        bleScanPhase = BleScanPhase.Error,
+                        bleErrorMessage = "No pudimos completar la búsqueda Bluetooth. Intentá de nuevo.",
+                    )
+                }
+            }
+        }
+    }
+
+    private fun macMatches(device: ScannedShellyDevice, target: String): Boolean =
+        normalizeMac(device.macAddress) == target || normalizeMac(device.id) == target
+
+    private fun updateBlePhase(phase: BleScanPhase, message: String? = null) {
+        cancelScan()
+        _uiState.update {
+            it.copy(
+                bleScanPhase = phase,
+                bleErrorMessage = message,
+                scannedDevices = emptyList(),
+                matchedDevice = null,
+            )
+        }
+    }
+
+    private fun cancelScan() {
+        scanJob?.cancel()
+        scanJob = null
+    }
+
+    override fun onCleared() {
+        cancelScan()
+        super.onCleared()
     }
 
     private fun cancelLookup() {
@@ -188,5 +307,7 @@ class AdoptionViewModel(
     private companion object {
         private const val STATUS_AVAILABLE = "available"
         private const val STATUS_ASSIGNED = "assigned"
+        private const val SCAN_TIMEOUT_MS = 15_000L
+        private const val MIN_MAC_HEX = 6
     }
 }

@@ -1,39 +1,66 @@
 package com.habitergy.link.ui.adoption
 
+import android.bluetooth.BluetoothAdapter
+import android.content.Intent
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.BluetoothSearching
 import androidx.compose.material.icons.filled.BluetoothDisabled
+import androidx.compose.material.icons.filled.ErrorOutline
+import androidx.compose.material.icons.filled.LocationOn
+import androidx.compose.material.icons.filled.SearchOff
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.habitergy.link.domain.model.AdoptionUiState
+import com.habitergy.link.domain.model.BleScanPhase
 import com.habitergy.link.ui.components.AdoptionScreenScaffold
+import com.habitergy.link.ui.components.ControllerFoundBanner
+import com.habitergy.link.ui.components.HabitergyPrimaryButton
 import com.habitergy.link.ui.components.HabitergySecondaryButton
 import com.habitergy.link.ui.components.ScreenTitle
+import com.habitergy.link.ui.components.ShellyDeviceCard
 import com.habitergy.link.ui.theme.HabitergyColors
 
 /**
  * Paso 2 — Conectá por Bluetooth.
  *
- * El escaneo BLE real (BluetoothLeScanner + filtro Allterco) aún no está
- * implementado. Esta pantalla es un placeholder informativo; no usa datos
- * mock. Cuando se implemente BLE real, restaurar la máquina de estados
- * BleScanPhase (Matched/SelectDevice/Empty/Error) contra un repositorio BLE.
+ * Escaneo BLE real: verifica permisos y que el adaptador esté encendido, y
+ * busca el controlador Shelly cuya MAC coincide con la resuelta en el paso 1.
+ * Si el partner ingresó sin código, muestra la lista de Shelly cercanos.
  */
 @Composable
 fun Step2BleScanScreen(
     state: AdoptionUiState,
+    onCheckReadiness: () -> Unit,
+    onRetry: () -> Unit,
+    onSelectDevice: (String) -> Unit,
     onBack: () -> Unit,
 ) {
+    val permissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions(),
+    ) { onCheckReadiness() }
+
+    val enableBluetoothLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult(),
+    ) { onCheckReadiness() }
+
+    LaunchedEffect(Unit) { onCheckReadiness() }
+
     AdoptionScreenScaffold(
         currentStep = state.currentStep,
         totalSteps = state.totalSteps,
@@ -41,35 +68,177 @@ fun Step2BleScanScreen(
         content = {
             ScreenTitle(
                 title = "Conectá por Bluetooth",
-                subtitle = "Vamos a buscar tu controlador Shelly por Bluetooth usando la MAC registrada.",
+                subtitle = "Vamos a buscar tu controlador Shelly por Bluetooth. " +
+                    "Acercá el teléfono al controlador y mantenelo encendido.",
             )
 
-            Column(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(16.dp),
-            ) {
-                Icon(
-                    imageVector = Icons.Default.BluetoothDisabled,
-                    contentDescription = null,
-                    tint = HabitergyColors.Secondary,
-                    modifier = Modifier.size(48.dp),
+            when (state.bleScanPhase) {
+                BleScanPhase.PermissionRequired -> BleStatus(
+                    icon = Icons.Default.LocationOn,
+                    message = "Necesitamos permiso de Bluetooth para buscar el controlador cercano.",
+                    action = {
+                        HabitergyPrimaryButton(
+                            label = "Otorgar permisos",
+                            showArrow = false,
+                            onClick = { permissionLauncher.launch(bleRequiredPermissions()) },
+                        )
+                    },
                 )
-                Text(
-                    text = "El escaneo Bluetooth real se habilitará en una próxima versión. " +
-                        "Por ahora, la adopción se detiene en este paso.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = HabitergyColors.TextSecondary,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.fillMaxWidth(),
+
+                BleScanPhase.BluetoothOff -> BleStatus(
+                    icon = Icons.Default.BluetoothDisabled,
+                    message = "El Bluetooth está apagado. Encendelo para buscar el controlador.",
+                    action = {
+                        HabitergyPrimaryButton(
+                            label = "Encender Bluetooth",
+                            showArrow = false,
+                            onClick = {
+                                enableBluetoothLauncher.launch(
+                                    Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE),
+                                )
+                            },
+                        )
+                    },
                 )
+
+                BleScanPhase.Scanning -> BleScanningIndicator()
+
+                BleScanPhase.Matched -> state.matchedDevice?.let { device ->
+                    ControllerFoundBanner(device = device, modifier = Modifier.fillMaxWidth())
+                }
+
+                BleScanPhase.DeviceList -> DeviceList(
+                    state = state,
+                    onSelectDevice = onSelectDevice,
+                )
+
+                BleScanPhase.NotFound -> BleStatus(
+                    icon = Icons.Default.SearchOff,
+                    message = "No encontramos el controlador por Bluetooth. Verificá que esté " +
+                        "encendido y cerca del teléfono, y volvé a intentar.",
+                )
+
+                BleScanPhase.Empty -> BleStatus(
+                    icon = Icons.Default.SearchOff,
+                    message = "No encontramos ningún controlador Shelly cerca. Acercá el " +
+                        "teléfono y volvé a intentar.",
+                )
+
+                BleScanPhase.Error -> BleStatus(
+                    icon = Icons.Default.ErrorOutline,
+                    message = state.bleErrorMessage
+                        ?: "Ocurrió un problema con el Bluetooth. Intentá de nuevo.",
+                    tint = HabitergyColors.Error,
+                )
+
+                BleScanPhase.Idle -> Unit
             }
         },
         footer = {
-            HabitergySecondaryButton(
-                label = "Volver",
-                onClick = onBack,
-            )
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                when (state.bleScanPhase) {
+                    BleScanPhase.Matched, BleScanPhase.DeviceList -> {
+                        HabitergyPrimaryButton(
+                            label = "Siguiente (próximamente)",
+                            enabled = false,
+                            onClick = {},
+                        )
+                        HabitergySecondaryButton(label = "Volver", onClick = onBack)
+                    }
+
+                    BleScanPhase.NotFound, BleScanPhase.Empty, BleScanPhase.Error -> {
+                        HabitergyPrimaryButton(
+                            label = "Buscar de nuevo",
+                            showArrow = false,
+                            onClick = onRetry,
+                        )
+                        HabitergySecondaryButton(label = "Volver", onClick = onBack)
+                    }
+
+                    else -> HabitergySecondaryButton(label = "Volver", onClick = onBack)
+                }
+            }
         },
     )
 }
+
+@Composable
+private fun DeviceList(
+    state: AdoptionUiState,
+    onSelectDevice: (String) -> Unit,
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Text(
+            text = "Elegí tu controlador de la lista:",
+            style = MaterialTheme.typography.bodyMedium,
+            color = HabitergyColors.TextSecondary,
+        )
+        state.scannedDevices.forEach { device ->
+            ShellyDeviceCard(
+                device = device,
+                selected = state.selectedDeviceId == device.id,
+                onSelect = { onSelectDevice(device.id) },
+            )
+        }
+    }
+}
+
+@Composable
+private fun BleScanningIndicator() {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        Icon(
+            imageVector = Icons.AutoMirrored.Filled.BluetoothSearching,
+            contentDescription = null,
+            tint = HabitergyColors.Primary,
+            modifier = Modifier.size(48.dp),
+        )
+        CircularProgressIndicator(color = HabitergyColors.Primary)
+        Text(
+            text = "Buscando tu controlador…",
+            style = MaterialTheme.typography.bodyMedium,
+            color = HabitergyColors.TextSecondary,
+            textAlign = TextAlign.Center,
+        )
+    }
+}
+
+@Composable
+private fun BleStatus(
+    icon: ImageVector,
+    message: String,
+    tint: androidx.compose.ui.graphics.Color = HabitergyColors.Secondary,
+    action: (@Composable () -> Unit)? = null,
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = tint,
+            modifier = Modifier.size(48.dp),
+        )
+        Text(
+            text = message,
+            style = MaterialTheme.typography.bodyMedium,
+            color = HabitergyColors.TextSecondary,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        action?.let {
+            Column(modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) { it() }
+        }
+    }
+}
+
+private fun bleRequiredPermissions(): Array<String> =
+    com.habitergy.link.data.ble.BlePermissions.required

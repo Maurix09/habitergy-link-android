@@ -55,9 +55,12 @@ pnpm --filter @habitergy/database seed
 - **Escanear QR** → placeholder («Coming soon»)
 - **¿No tenés el código?** → avanza al paso 2 sin MAC
 
-### Paso 2 — Bluetooth (placeholder)
+### Paso 2 — Bluetooth (real)
 
-- Pantalla informativa; escaneo BLE real pendiente
+- Verifica permisos de runtime y que el Bluetooth esté encendido (dispara el diálogo del sistema si hace falta)
+- Escanea por BLE (`BluetoothLeScanner`, filtro Allterco `0x0BA9`) y hace match por MAC con la resuelta en el paso 1
+- Sin código: muestra la lista de Shelly 1PM cercanos para elegir
+- El «Siguiente» queda deshabilitado hasta implementar el paso 3
 
 ## Estructura
 
@@ -69,6 +72,7 @@ app/src/main/java/com/habitergy/link/
 │   └── model/AdoptionModels.kt
 ├── data/
 │   ├── api/                   # Ktor → apps/api
+│   ├── ble/                   # ShellyBleScanner + parseo Allterco + permisos
 │   └── AdoptionRepository.kt
 └── ui/
     ├── adoption/              # ViewModel + pantallas paso 1–2
@@ -78,7 +82,7 @@ app/src/main/java/com/habitergy/link/
 
 ## Próximos pasos
 
-- [ ] BLE real (`BluetoothLeScanner` + filtros Allterco)
+- [x] BLE real (`BluetoothLeScanner` + filtros Allterco + match por MAC)
 - [ ] QR con CameraX + ML Kit
 - [x] API lookup `GET /api/adoption/devices/:deviceCode`
 - [x] Checksum nanoId unificado con `siteCode`

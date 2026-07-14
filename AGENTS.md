@@ -12,7 +12,7 @@ Este archivo provee contexto esencial para cualquier agente de IA (LLM) que deba
 | **Propósito** | Wizard nativo de adopción de controladores **Shelly 1PM Gen3/Gen4** (BLE, WiFi, provisioning) |
 | **Stack** | Kotlin + Jetpack Compose + Material 3 |
 | **Build** | Gradle ( **no** forma parte de pnpm/Turbo del monorepo ) |
-| **Versión actual** | `0.1.10` — paso **1 real** (lookup API + checksum), paso **2 placeholder** BLE |
+| **Versión actual** | `0.1.11` — paso **1 real** (lookup API + checksum), paso **2 real** (escaneo BLE + match por MAC) |
 | **Play Store (planeado)** | Habitergy Link |
 
 Link reemplaza el wizard web de adopción en Android: acceso nativo a BLE, WiFi y provisioning sin limitaciones de Web Bluetooth ni mixed content.
@@ -107,13 +107,14 @@ apps/link-android/
         │   │       └── AdoptionModels.kt # UiState, enums, data classes, DeviceLookupState
         │   ├── data/
         │   │   ├── api/                  # Ktor: ApiConfig, AdoptionApi, AdoptionDeviceDto
+        │   │   ├── ble/                  # ShellyBleScanner, ShellyManufacturerData, ShellyModels, MacAddress, BlePermissions
         │   │   └── AdoptionRepository.kt # Lookup device_code → AdoptionLookupResult
         │   └── ui/
         │       ├── adoption/
         │       │   ├── AdoptionFlow.kt       # Switch paso 1 / 2
-        │       │   ├── AdoptionViewModel.kt  # Lógica del wizard (lookup real)
+        │       │   ├── AdoptionViewModel.kt  # Lógica del wizard (lookup real + escaneo BLE)
         │       │   ├── Step1IdentifyScreen.kt
-        │       │   └── Step2BleScanScreen.kt  # Placeholder BLE
+        │       │   └── Step2BleScanScreen.kt  # Escaneo BLE real
         │       ├── components/             # Scaffold, botones, tarjetas, DeviceCodeInput
         │       └── theme/                  # HabitergyColors, Theme, Typography, Shape
         └── res/                            # strings, colors, launcher, themes
@@ -127,7 +128,7 @@ apps/link-android/
 | Dominio | `domain/` | `DeviceCode` (sufijo nanoId), modelos puros sin Android |
 | Datos | `data/api/` | Ktor → `apps/api` (lookup adopción) |
 | Datos | `data/` | `AdoptionRepository` (abstracción sobre la API) |
-| (futuro) | `data/ble/` | `BluetoothLeScanner`, GATT Shelly (paso 2 real) |
+| Datos | `data/ble/` | `ShellyBleScanner` (escaneo paso 2), parseo Allterco, permisos; GATT Shelly (paso 3) pendiente |
 
 ## 6. Flujo de adopción (Link) — estado actual
 
@@ -153,7 +154,7 @@ Dos modos (`IdentificationMode`):
 | Modo | Cómo se activa | Comportamiento |
 |------|----------------|----------------|
 | **WithCode** | Default; usuario escribe los 5 caracteres del sufijo o escanea QR | Validación local de checksum → lookup API → estado de UI |
-| **NoCode** | Botón «¿No tenés el código?» | Sin MAC; avanza directo al paso 2 (placeholder) |
+| **NoCode** | Botón «¿No tenés el código?» | Sin MAC; en el paso 2 escanea y muestra la lista de Shelly cercanos para elegir |
 
 Formato del `device_code`: `SH-XXXXC` — prefijo `SH-` fijo + sufijo **nanoId** de 5 chars (mismo algoritmo que `siteCode`). Ej.: site `KX67W` ↔ device `SH-KX67W`. La UI muestra `SH-` fijo y 5 cajas para el sufijo.
 
@@ -175,13 +176,26 @@ Colores: verde `HabitergyColors.Primary` (Available), rojo `HabitergyColors.Erro
 
 ### Paso 2 — Conectá por Bluetooth (`Step2BleScanScreen`)
 
-**Placeholder.** El escaneo BLE real (`BluetoothLeScanner` + filtro Allterco) no está implementado. La pantalla muestra un aviso «próximamente» + botón Volver. No usa datos mock. La máquina de estados `BleScanPhase` (Matched/SelectDevice/Empty/Error) se conserva en `AdoptionModels` para cuando se implemente BLE real contra un repositorio BLE.
+**Escaneo BLE real.** Al entrar (`LaunchedEffect`) la UI llama `refreshBleReadiness()`, que verifica en orden: soporte BLE → permisos de runtime → adaptador encendido → arranca el escaneo. La máquina de estados `BleScanPhase` refleja cada situación:
 
-Navegación: `AdoptionFlow` hace `when (state.currentStep)`; back en paso 2 → `goBackToStep1()`.
+| Fase | Cuándo | UI |
+|------|--------|----|
+| `PermissionRequired` | faltan permisos | botón «Otorgar permisos» → `RequestMultiplePermissions` |
+| `BluetoothOff` | adaptador apagado | botón «Encender Bluetooth» → `BluetoothAdapter.ACTION_REQUEST_ENABLE` |
+| `Scanning` | escaneando (timeout 15 s) | spinner «Buscando tu controlador…» |
+| `Matched` | (WithCode) MAC objetivo encontrada | `ControllerFoundBanner` + «Siguiente» deshabilitado (paso 3 pendiente) |
+| `DeviceList` | (NoCode) hay Shelly cercanos | lista `ShellyDeviceCard` seleccionable |
+| `NotFound` | (WithCode) no apareció la MAC | mensaje + «Buscar de nuevo» |
+| `Empty` | (NoCode) ningún Shelly cerca | mensaje + «Buscar de nuevo» |
+| `Error` | BLE no soportado / fallo del escáner | `bleErrorMessage` + «Buscar de nuevo» |
+
+Escáner en `data/ble/` (`ShellyBleScanner` sobre `BluetoothLeScanner`, filtro por manufacturer ID Allterco `0x0BA9`, parseo de MAC/modelo en `ShellyManufacturerData.kt`, filtro Gen3 `0x1019`/Gen4 `0x1029`). El match compara la MAC anunciada (o `device.address`) contra `targetMacAddress` (normalizada). Permisos: `BLUETOOTH_SCAN` en Android 12+, `ACCESS_FINE_LOCATION` en ≤11 (`BlePermissions`).
+
+Navegación: `AdoptionFlow` hace `when (state.currentStep)`; back en paso 2 → `goBackToStep1()` (cancela el escaneo).
 
 ## 7. Estado y lógica (`AdoptionViewModel`)
 
-Fuente única de verdad: `StateFlow<AdoptionUiState>`. Depende de `AdoptionRepository` (inyectable, default `AdoptionRepository()`).
+Fuente única de verdad: `StateFlow<AdoptionUiState>`. Es un `AndroidViewModel` (necesita `Context` para el escáner BLE); crea internamente `AdoptionRepository()` y `ShellyBleScanner(application)`.
 
 Campos principales:
 
@@ -203,11 +217,11 @@ Propiedades derivadas en `AdoptionUiState`:
 - `targetMacAddress` — MAC del `resolvedDevice` (null si NoCode)
 - `selectedDevice` — `matchedDevice` o el elegido en lista
 
-**Al implementar BLE real:** restaurar `startBleScan()` en `AdoptionViewModel` llamando un repositorio BLE; reutilizar la máquina de estados `BleScanPhase`.
+**Escaneo BLE (paso 2):** `refreshBleReadiness()` (chequeos + arranque), `startBleScan()` (colecta el `Flow` de `ShellyBleScanner` con timeout, resuelve `Matched`/`NotFound`/`DeviceList`/`Empty`), `retryBleScan()`, `selectDevice(id)`. El `scanJob` se cancela al volver o en `onCleared()`.
 
 ## 8. Datos mock
 
-**Eliminados.** `MockAdoptionData.kt` y todos los datos de prueba (CX123/AB123/T3ST1, lista BLE fija, `MOCK_QR_DEVICE_CODE`, helper `macsMatch`) fueron retirados. El paso 1 usa lookup real contra la API; el paso 2 es un placeholder sin datos mock.
+**Eliminados.** `MockAdoptionData.kt` y todos los datos de prueba (CX123/AB123/T3ST1, lista BLE fija, `MOCK_QR_DEVICE_CODE`, helper `macsMatch`) fueron retirados. El paso 1 usa lookup real contra la API; el paso 2 escanea por BLE real (sin datos mock).
 
 ## 9. Qué es real vs mock
 
@@ -219,7 +233,7 @@ Propiedades derivadas en `AdoptionUiState`:
 | Lookup deviceCode → MAC/model/status | **Real** (`AdoptionRepository` → `GET /api/adoption/devices/:deviceCode`) |
 | Cliente HTTP (Ktor) | **Real** |
 | Escaneo QR | **Placeholder** (botón + snackbar «Coming soon») |
-| Escaneo BLE | **Placeholder** (pantalla «próximamente») |
+| Escaneo BLE + match por MAC | **Real** (`data/ble/ShellyBleScanner`, filtro Allterco, permisos + BT check) |
 | Auth JWT / login | **No implementado** |
 | GATT / RPC-over-BLE Shelly | **No implementado** |
 | WiFi provisioning (paso 3+) | **No implementado** |
@@ -227,9 +241,9 @@ Propiedades derivadas en `AdoptionUiState`:
 
 ## 10. Permisos (`AndroidManifest.xml`)
 
-- `BLUETOOTH`, `BLUETOOTH_ADMIN` (maxSdk 30) — BLE real (futuro)
-- `BLUETOOTH_SCAN`, `BLUETOOTH_CONNECT` — BLE real (futuro)
-- `ACCESS_FINE_LOCATION` (requerido para BLE scan en Android)
+- `BLUETOOTH`, `BLUETOOTH_ADMIN` (maxSdk 30) — BLE legacy (Android ≤11)
+- `BLUETOOTH_SCAN` — escaneo BLE paso 2 (**en uso**, Android 12+); `BLUETOOTH_CONNECT` reservado para GATT (paso 3)
+- `ACCESS_FINE_LOCATION` (requerido para BLE scan en Android ≤11, **en uso**)
 - `CAMERA` (QR, futuro)
 - `INTERNET` — lookup HTTP contra `apps/api` (**en uso**)
 
@@ -275,7 +289,7 @@ Cliente HTTP: **Ktor Client** en `data/api/` (`AdoptionApi`), base URL en `ApiCo
 
 ## 14. Roadmap técnico (prioridad sugerida)
 
-- [ ] BLE real: `BluetoothLeScanner` + filtro Allterco + parseo manufacturer data
+- [x] BLE real: `BluetoothLeScanner` + filtro Allterco + parseo manufacturer data + match por MAC (paso 2)
 - [ ] QR real: CameraX + ML Kit / ZXing
 - [x] API lookup: `GET /api/adoption/devices/:deviceCode` (paso 1)
 - [x] Validación checksum unificada nanoId (`siteCode` + `deviceCode` SH-XXXXC)
