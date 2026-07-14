@@ -67,8 +67,8 @@ fun Step1IdentifyScreen(
                     imageContentDescription = "Código QR del controlador en el kit de instalación",
                     title = "Identificá el controlador",
                     subtitle = "En el kit de instalación vas a encontrar un código único " +
-                        "(ej: SH-KX67W) junto con un QR. Ingresá los 5 caracteres después de SH- " +
-                        "para verificarlo o escaneá el código con la cámara.",
+                        "(ej: SH-KX67W) junto con un QR. Ingresá los 5 caracteres finales " +
+                        "(ej: KX67W) para verificarlo o escaneá el código con la cámara.",
                 )
 
                 DeviceCodeInput(

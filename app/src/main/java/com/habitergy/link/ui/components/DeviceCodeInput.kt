@@ -126,8 +126,8 @@ fun DeviceCodeInput(
             .semantics {
                 contentDescription = "Código del controlador"
                 stateDescription = buildString {
-                    append("Prefijo SH. ")
-                    append("Completaste ${normalizedCode.length} de $DEVICE_CODE_LENGTH caracteres. ")
+                    append("Ingresaste ${normalizedCode.length} de $DEVICE_CODE_LENGTH caracteres. ")
+                    append("El prefijo SH se agrega automáticamente al verificar el código. ")
                     append(messageUi.text)
                 }
                 if (messageUi.isError) {
@@ -151,15 +151,9 @@ fun DeviceCodeInput(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clearAndSetSemantics {},
-                    horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterHorizontally),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text(
-                        text = "SH-",
-                        style = MaterialTheme.typography.titleLarge,
-                        color = HabitergyColors.TextTitle,
-                    )
-
                     repeat(DEVICE_CODE_LENGTH) { index ->
                         CodeCharBox(
                             value = normalizedCode.getOrNull(index)?.toString().orEmpty(),
@@ -173,17 +167,12 @@ fun DeviceCodeInput(
                             },
                         )
                     }
-
-                    if (isLooking) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(20.dp),
-                            strokeWidth = 2.dp,
-                            color = HabitergyColors.Primary,
-                        )
-                    }
                 }
 
-                LookupMessage(messageUi = messageUi)
+                LookupMessage(
+                    messageUi = messageUi,
+                    showSpinner = isLooking,
+                )
             }
         },
     )
@@ -192,17 +181,31 @@ fun DeviceCodeInput(
 @Composable
 private fun LookupMessage(
     messageUi: LookupMessageUi,
+    showSpinner: Boolean,
     modifier: Modifier = Modifier,
 ) {
-    Text(
-        text = messageUi.text,
-        color = messageUi.color,
-        style = MaterialTheme.typography.bodyMedium,
+    Row(
         modifier = modifier
             .fillMaxWidth()
             .semantics { liveRegion = LiveRegionMode.Polite },
-        textAlign = TextAlign.Center,
-    )
+        horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (showSpinner) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(18.dp),
+                strokeWidth = 2.dp,
+                color = HabitergyColors.Primary,
+            )
+        }
+
+        Text(
+            text = messageUi.text,
+            color = messageUi.color,
+            style = MaterialTheme.typography.bodyMedium,
+            textAlign = TextAlign.Center,
+        )
+    }
 }
 
 @Composable
@@ -224,7 +227,7 @@ private fun CodeCharBox(
 
     Box(
         modifier = Modifier
-            .size(52.dp)
+            .size(48.dp)
             .clip(shape)
             .background(HabitergyColors.Card)
             .border(width = borderWidth, color = borderColor, shape = shape)
