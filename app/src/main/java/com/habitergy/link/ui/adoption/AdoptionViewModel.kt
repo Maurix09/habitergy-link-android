@@ -5,24 +5,28 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.habitergy.link.data.AdoptionLookupResult
 import com.habitergy.link.data.AdoptionRepository
+import com.habitergy.link.data.ble.BleAdvertisement
 import com.habitergy.link.data.ble.BlePermissions
 import com.habitergy.link.data.ble.ShellyBleScanner
+import com.habitergy.link.data.ble.buildShellyDisplayName
+import com.habitergy.link.data.ble.formatMac
 import com.habitergy.link.data.ble.normalizeMac
 import com.habitergy.link.domain.DeviceCode
 import com.habitergy.link.domain.model.AdoptionUiState
 import com.habitergy.link.domain.model.BleScanPhase
 import com.habitergy.link.domain.model.DEVICE_CODE_LENGTH
 import com.habitergy.link.domain.model.DeviceLookupState
+import com.habitergy.link.domain.model.DiscoveredBleDevice
 import com.habitergy.link.domain.model.IdentificationMode
 import com.habitergy.link.domain.model.ResolvedDevice
 import com.habitergy.link.domain.model.ScannedShellyDevice
 import com.habitergy.link.domain.model.UNKNOWN_DEVICE_CODE
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.firstOrNull
-import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
@@ -153,6 +157,7 @@ class AdoptionViewModel(
             it.copy(
                 currentStep = 2,
                 bleScanPhase = BleScanPhase.Idle,
+                discoveredBleDevices = emptyList(),
                 scannedDevices = emptyList(),
                 matchedDevice = null,
                 selectedDeviceId = null,
@@ -168,6 +173,7 @@ class AdoptionViewModel(
             it.copy(
                 currentStep = 1,
                 bleScanPhase = BleScanPhase.Idle,
+                discoveredBleDevices = emptyList(),
                 scannedDevices = emptyList(),
                 matchedDevice = null,
                 selectedDeviceId = null,
@@ -214,6 +220,7 @@ class AdoptionViewModel(
         _uiState.update {
             it.copy(
                 bleScanPhase = BleScanPhase.Scanning,
+                discoveredBleDevices = emptyList(),
                 scannedDevices = emptyList(),
                 matchedDevice = null,
                 selectedDeviceId = null,
@@ -222,34 +229,51 @@ class AdoptionViewModel(
         }
 
         scanJob = viewModelScope.launch {
-            val found = LinkedHashMap<String, ScannedShellyDevice>()
+            val found = LinkedHashMap<String, DiscoveredBleDevice>()
+            var matched: ScannedShellyDevice? = null
             try {
-                val matched = withTimeoutOrNull(SCAN_TIMEOUT_MS) {
-                    bleScanner.scan()
-                        .onEach { device ->
-                            found[device.id] = device
-                            if (target == null) {
-                                _uiState.update { state ->
-                                    state.copy(scannedDevices = found.values.sortedByDescending { it.rssi })
-                                }
-                            }
+                withTimeoutOrNull(SCAN_TIMEOUT_MS) {
+                    bleScanner.scanAll().collect { advertisement ->
+                        val device = upsertDiscoveredDevice(
+                            found = found,
+                            advertisement = advertisement,
+                            targetMac = target,
+                        )
+                        found[device.id] = device
+
+                        _uiState.update { state ->
+                            state.copy(
+                                discoveredBleDevices = found.values
+                                    .sortedByDescending { it.rssi }
+                                    .toList(),
+                            )
                         }
-                        .firstOrNull { device -> target != null && macMatches(device, target) }
+
+                        if (target != null && device.isMatched && matched == null) {
+                            matched = device.toScannedShellyDevice()
+                            _uiState.update {
+                                it.copy(
+                                    bleScanPhase = BleScanPhase.Matched,
+                                    matchedDevice = matched,
+                                    scannedDevices = listOf(matched!!),
+                                )
+                            }
+                            currentCoroutineContext()[Job]?.cancel()
+                        }
+                    }
                 }
 
+                val finalState = _uiState.value
+                if (finalState.bleScanPhase == BleScanPhase.Matched) return@launch
+
                 when {
-                    target != null && matched != null -> _uiState.update {
-                        it.copy(
-                            bleScanPhase = BleScanPhase.Matched,
-                            matchedDevice = matched,
-                            scannedDevices = listOf(matched),
-                        )
-                    }
                     target != null -> _uiState.update { it.copy(bleScanPhase = BleScanPhase.NotFound) }
                     found.isNotEmpty() -> _uiState.update {
                         it.copy(
                             bleScanPhase = BleScanPhase.DeviceList,
-                            scannedDevices = found.values.sortedByDescending { device -> device.rssi },
+                            scannedDevices = found.values
+                                .map { device -> device.toScannedShellyDevice() }
+                                .sortedByDescending { device -> device.rssi },
                         )
                     }
                     else -> _uiState.update { it.copy(bleScanPhase = BleScanPhase.Empty) }
@@ -266,8 +290,46 @@ class AdoptionViewModel(
         }
     }
 
-    private fun macMatches(device: ScannedShellyDevice, target: String): Boolean =
-        normalizeMac(device.macAddress) == target || normalizeMac(device.id) == target
+    private fun upsertDiscoveredDevice(
+        found: LinkedHashMap<String, DiscoveredBleDevice>,
+        advertisement: BleAdvertisement,
+        targetMac: String?,
+    ): DiscoveredBleDevice {
+        val bleMac = formatMac(advertisement.address)
+        val displayName = advertisement.advertisedName ?: bleMac
+        val isMatched = targetMac != null && macMatchesAdvertisement(advertisement, targetMac)
+        val previous = found[advertisement.address]
+
+        return DiscoveredBleDevice(
+            id = advertisement.address,
+            displayName = displayName,
+            macAddress = bleMac,
+            rssi = advertisement.rssi,
+            shellyMacAddress = advertisement.shellyMacAddress,
+            isMatched = isMatched || (previous?.isMatched == true),
+        )
+    }
+
+    private fun macMatchesAdvertisement(advertisement: BleAdvertisement, target: String): Boolean {
+        if (normalizeMac(advertisement.address) == target) return true
+        advertisement.shellyMacAddress?.let { if (normalizeMac(it) == target) return true }
+        return false
+    }
+
+    private fun DiscoveredBleDevice.toScannedShellyDevice(): ScannedShellyDevice {
+        val mac = shellyMacAddress ?: macAddress
+        val name = if (displayName != macAddress && !displayName.contains(':')) {
+            displayName
+        } else {
+            buildShellyDisplayName(mac)
+        }
+        return ScannedShellyDevice(
+            id = id,
+            name = name,
+            macAddress = mac,
+            rssi = rssi,
+        )
+    }
 
     private fun updateBlePhase(phase: BleScanPhase, message: String? = null) {
         cancelScan()
@@ -275,6 +337,7 @@ class AdoptionViewModel(
             it.copy(
                 bleScanPhase = phase,
                 bleErrorMessage = message,
+                discoveredBleDevices = emptyList(),
                 scannedDevices = emptyList(),
                 matchedDevice = null,
             )

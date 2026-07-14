@@ -40,6 +40,18 @@ data class ResolvedDevice(
     val model: String,
 )
 
+/** Dispositivo BLE crudo detectado durante el escaneo (sin filtrar por Shelly). */
+data class DiscoveredBleDevice(
+    val id: String,
+    /** Nombre anunciado o la MAC si el dispositivo no tiene nombre. */
+    val displayName: String,
+    val macAddress: String,
+    val rssi: Int,
+    /** MAC WiFi extraída del manufacturer data Shelly, si está presente. */
+    val shellyMacAddress: String? = null,
+    val isMatched: Boolean = false,
+)
+
 /** Controlador Shelly detectado por escaneo BLE. */
 data class ScannedShellyDevice(
     val id: String,
@@ -95,6 +107,7 @@ data class AdoptionUiState(
     val lookupState: DeviceLookupState = DeviceLookupState.Idle,
     // Paso 2
     val bleScanPhase: BleScanPhase = BleScanPhase.Idle,
+    val discoveredBleDevices: List<DiscoveredBleDevice> = emptyList(),
     val scannedDevices: List<ScannedShellyDevice> = emptyList(),
     val matchedDevice: ScannedShellyDevice? = null,
     val selectedDeviceId: String? = null,

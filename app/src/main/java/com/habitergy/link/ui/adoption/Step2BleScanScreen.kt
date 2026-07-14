@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.BluetoothSearching
 import androidx.compose.material.icons.filled.BluetoothDisabled
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.SearchOff
@@ -29,7 +30,7 @@ import androidx.compose.ui.unit.dp
 import com.habitergy.link.domain.model.AdoptionUiState
 import com.habitergy.link.domain.model.BleScanPhase
 import com.habitergy.link.ui.components.AdoptionScreenScaffold
-import com.habitergy.link.ui.components.ControllerFoundBanner
+import com.habitergy.link.ui.components.BleDiscoveryList
 import com.habitergy.link.ui.components.HabitergyPrimaryButton
 import com.habitergy.link.ui.components.HabitergySecondaryButton
 import com.habitergy.link.ui.components.ScreenTitle
@@ -39,9 +40,8 @@ import com.habitergy.link.ui.theme.HabitergyColors
 /**
  * Paso 2 — Conectá por Bluetooth.
  *
- * Escaneo BLE real: verifica permisos y que el adaptador esté encendido, y
- * busca el controlador Shelly cuya MAC coincide con la resuelta en el paso 1.
- * Si el partner ingresó sin código, muestra la lista de Shelly cercanos.
+ * Muestra en vivo todos los dispositivos BLE que detecta el celular. Cuando
+ * aparece el que coincide con la MAC del paso 1, lo resalta con un tilde.
  */
 @Composable
 fun Step2BleScanScreen(
@@ -61,6 +61,15 @@ fun Step2BleScanScreen(
 
     LaunchedEffect(Unit) { onCheckReadiness() }
 
+    val showDiscoveryList = state.discoveredBleDevices.isNotEmpty() &&
+        state.bleScanPhase in setOf(
+            BleScanPhase.Scanning,
+            BleScanPhase.Matched,
+            BleScanPhase.NotFound,
+            BleScanPhase.Empty,
+            BleScanPhase.Error,
+        )
+
     AdoptionScreenScaffold(
         currentStep = state.currentStep,
         totalSteps = state.totalSteps,
@@ -68,8 +77,15 @@ fun Step2BleScanScreen(
         content = {
             ScreenTitle(
                 title = "Conectá por Bluetooth",
-                subtitle = "Vamos a buscar tu controlador Shelly por Bluetooth. " +
-                    "Acercá el teléfono al controlador y mantenelo encendido.",
+                subtitle = when (state.bleScanPhase) {
+                    BleScanPhase.Scanning ->
+                        "Buscando dispositivos… Mantené el botón del controlador 5 s si no aparece."
+                    BleScanPhase.Matched ->
+                        "Encontramos tu controlador. Verificá que coincida con la MAC registrada."
+                    else ->
+                        "Vamos a buscar tu controlador Shelly por Bluetooth. " +
+                            "Acercá el teléfono al controlador y mantenelo encendido."
+                },
             )
 
             when (state.bleScanPhase) {
@@ -103,9 +119,7 @@ fun Step2BleScanScreen(
 
                 BleScanPhase.Scanning -> BleScanningIndicator()
 
-                BleScanPhase.Matched -> state.matchedDevice?.let { device ->
-                    ControllerFoundBanner(device = device, modifier = Modifier.fillMaxWidth())
-                }
+                BleScanPhase.Matched -> MatchedIndicator()
 
                 BleScanPhase.DeviceList -> DeviceList(
                     state = state,
@@ -120,8 +134,12 @@ fun Step2BleScanScreen(
 
                 BleScanPhase.Empty -> BleStatus(
                     icon = Icons.Default.SearchOff,
-                    message = "No encontramos ningún controlador Shelly cerca. Acercá el " +
-                        "teléfono y volvé a intentar.",
+                    message = if (state.discoveredBleDevices.isEmpty()) {
+                        "No detectamos ningún dispositivo Bluetooth cerca. Acercá el " +
+                            "teléfono y volvé a intentar."
+                    } else {
+                        "Detectamos dispositivos Bluetooth, pero ninguno coincide con tu controlador."
+                    },
                 )
 
                 BleScanPhase.Error -> BleStatus(
@@ -133,6 +151,18 @@ fun Step2BleScanScreen(
 
                 BleScanPhase.Idle -> Unit
             }
+
+            if (showDiscoveryList) {
+                BleDiscoveryList(
+                    devices = state.discoveredBleDevices,
+                    modifier = Modifier.padding(top = 20.dp),
+                    header = when (state.bleScanPhase) {
+                        BleScanPhase.Matched -> "Controlador identificado"
+                        BleScanPhase.Scanning -> "Dispositivos Bluetooth detectados"
+                        else -> "Dispositivos detectados en el último escaneo"
+                    },
+                )
+            }
         },
         footer = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -142,6 +172,14 @@ fun Step2BleScanScreen(
                             label = "Siguiente (próximamente)",
                             enabled = false,
                             onClick = {},
+                        )
+                        HabitergySecondaryButton(label = "Volver", onClick = onBack)
+                    }
+
+                    BleScanPhase.Scanning -> {
+                        HabitergySecondaryButton(
+                            label = "Buscar de nuevo",
+                            onClick = onRetry,
                         )
                         HabitergySecondaryButton(label = "Volver", onClick = onBack)
                     }
@@ -201,9 +239,31 @@ private fun BleScanningIndicator() {
         )
         CircularProgressIndicator(color = HabitergyColors.Primary)
         Text(
-            text = "Buscando tu controlador…",
+            text = "Buscando dispositivos Bluetooth…",
             style = MaterialTheme.typography.bodyMedium,
             color = HabitergyColors.TextSecondary,
+            textAlign = TextAlign.Center,
+        )
+    }
+}
+
+@Composable
+private fun MatchedIndicator() {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Icon(
+            imageVector = Icons.Default.CheckCircle,
+            contentDescription = null,
+            tint = HabitergyColors.Primary,
+            modifier = Modifier.size(48.dp),
+        )
+        Text(
+            text = "Controlador encontrado",
+            style = MaterialTheme.typography.titleLarge,
+            color = HabitergyColors.Primary,
             textAlign = TextAlign.Center,
         )
     }
