@@ -12,7 +12,7 @@ Este archivo provee contexto esencial para cualquier agente de IA (LLM) que deba
 | **Propósito** | Wizard nativo de adopción de controladores **Shelly 1PM Gen3/Gen4** (BLE, WiFi, provisioning) |
 | **Stack** | Kotlin + Jetpack Compose + Material 3 |
 | **Build** | Gradle ( **no** forma parte de pnpm/Turbo del monorepo ) |
-| **Versión actual** | `0.1.9` — paso **1 real** (lookup API + checksum), paso **2 placeholder** BLE |
+| **Versión actual** | `0.1.10` — paso **1 real** (lookup API + checksum), paso **2 placeholder** BLE |
 | **Play Store (planeado)** | Habitergy Link |
 
 Link reemplaza el wizard web de adopción en Android: acceso nativo a BLE, WiFi y provisioning sin limitaciones de Web Bluetooth ni mixed content.
@@ -98,7 +98,7 @@ apps/link-android/
     ├── build.gradle.kts          # applicationId, minSdk 26, Ktor + serialization deps
     └── src/main/
         ├── AndroidManifest.xml   # Permisos BLE, location, camera, INTERNET
-        ├── res/xml/network_security_config.xml  # Cleartext solo 10.0.2.2 (debug)
+        ├── res/xml/network_security_config.xml  # HTTPS only (sin cleartext)
         ├── java/com/habitergy/link/
         │   ├── MainActivity.kt           # Entry: HabitergyTheme + AdoptionFlow
         │   ├── domain/
@@ -234,7 +234,7 @@ Propiedades derivadas en `AdoptionUiState`:
 - `INTERNET` — lookup HTTP contra `apps/api` (**en uso**)
 
 `uses-feature`: `bluetooth_le` required; `camera` optional.
-`networkSecurityConfig`: cleartext solo para `10.0.2.2` (host del emulador en debug).
+`networkSecurityConfig`: solo HTTPS (sin cleartext).
 
 ## 11. Protocolo Shelly (referencia para BLE real)
 
@@ -260,7 +260,7 @@ Endpoints relevantes:
 
 **Pendiente para adopción completa:** endpoint de registro/provisionamiento del dispositivo adoptado y vinculación a `site_id` (pasos 4–6).
 
-Cliente HTTP: **Ktor Client** en `data/api/` (`AdoptionApi`), base URL en `ApiConfig` (debug → `http://10.0.2.2:3000`, release → `https://api.habitergy.com`). Auth: JWT igual que Manager (`Authorization: Bearer`) cuando se implemente login.
+Cliente HTTP: **Ktor Client** en `data/api/` (`AdoptionApi`), base URL en `ApiConfig` → `https://api.habitergy.com`. Auth: JWT igual que Manager (`Authorization: Bearer`) cuando se implemente login.
 
 ## 13. Convenciones para agentes
 

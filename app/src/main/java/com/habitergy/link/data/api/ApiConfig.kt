@@ -1,17 +1,11 @@
 package com.habitergy.link.data.api
 
-import com.habitergy.link.BuildConfig
-
 /**
- * Configuración de la API. En debug apunta al emulador (10.0.2.2 = localhost
- * de la máquina host); en release al dominio de producción.
+ * Configuración de la API. Habitergy Link consulta el backend público;
+ * la API es quien habla con PostgreSQL (`db.habitergy.com`).
  */
 object ApiConfig {
-    val BASE_URL: String = if (BuildConfig.DEBUG) {
-        "http://10.0.2.2:3000"
-    } else {
-        "https://api.habitergy.com"
-    }
+    const val BASE_URL: String = "https://api.habitergy.com"
 
     const val ADOPTION_DEVICE_PATH = "/api/adoption/devices"
 }

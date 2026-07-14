@@ -10,7 +10,7 @@ App nativa Android para la **adopción de controladores Shelly** en Habitergy. C
 - JDK 17
 - Android SDK 35
 - Emulador API 34+ (recomendado: Pixel 6)
-- API local en `http://localhost:3000` (el emulador usa `http://10.0.2.2:3000`)
+- Backend en `https://api.habitergy.com` (lookup de `device_code` vía API)
 
 ## Abrir el proyecto
 
