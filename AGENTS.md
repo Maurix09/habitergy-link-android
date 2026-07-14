@@ -12,7 +12,7 @@ Este archivo provee contexto esencial para cualquier agente de IA (LLM) que deba
 | **Propósito** | Wizard nativo de adopción de controladores **Shelly 1PM Gen3/Gen4** (BLE, WiFi, provisioning) |
 | **Stack** | Kotlin + Jetpack Compose + Material 3 |
 | **Build** | Gradle ( **no** forma parte de pnpm/Turbo del monorepo ) |
-| **Versión actual** | `0.1.6` — paso **1 real** (lookup API + checksum), paso **2 placeholder** BLE |
+| **Versión actual** | `0.1.7` — paso **1 real** (lookup API + checksum), paso **2 placeholder** BLE |
 | **Play Store (planeado)** | Habitergy Link |
 
 Link reemplaza el wizard web de adopción en Android: acceso nativo a BLE, WiFi y provisioning sin limitaciones de Web Bluetooth ni mixed content.
@@ -102,7 +102,7 @@ apps/link-android/
         ├── java/com/habitergy/link/
         │   ├── MainActivity.kt           # Entry: HabitergyTheme + AdoptionFlow
         │   ├── domain/
-        │   │   ├── DeviceCode.kt         # Checksum SH-XXXXC (réplica de @habitergy/utils)
+        │   │   ├── DeviceCode.kt         # Sufijo nanoId + prefijo SH- (réplica de nanoId.ts)
         │   │   └── model/
         │   │       └── AdoptionModels.kt # UiState, enums, data classes, DeviceLookupState
         │   ├── data/
@@ -124,7 +124,7 @@ apps/link-android/
 | Capa | Paquete | Responsabilidad |
 |------|---------|-----------------|
 | UI | `ui/` | Composables, ViewModels |
-| Dominio | `domain/` | `DeviceCode` (checksum), modelos puros sin Android |
+| Dominio | `domain/` | `DeviceCode` (sufijo nanoId), modelos puros sin Android |
 | Datos | `data/api/` | Ktor → `apps/api` (lookup adopción) |
 | Datos | `data/` | `AdoptionRepository` (abstracción sobre la API) |
 | (futuro) | `data/ble/` | `BluetoothLeScanner`, GATT Shelly (paso 2 real) |
@@ -155,13 +155,13 @@ Dos modos (`IdentificationMode`):
 | **WithCode** | Default; usuario escribe los 5 caracteres del sufijo o escanea QR | Validación local de checksum → lookup API → estado de UI |
 | **NoCode** | Botón «¿No tenés el código?» | Sin MAC; avanza directo al paso 2 (placeholder) |
 
-Formato del `device_code`: `SH-XXXXC` (prefijo `SH-` fijo + 4 cuerpo + 1 checksum). La UI muestra `SH-` fijo y 5 cajas para el sufijo.
+Formato del `device_code`: `SH-XXXXC` — prefijo `SH-` fijo + sufijo **nanoId** de 5 chars (mismo algoritmo que `siteCode`). Ej.: site `KX67W` ↔ device `SH-KX67W`. La UI muestra `SH-` fijo y 5 cajas para el sufijo.
 
 Acciones:
 
 - **Campo código:** el usuario tipea el sufijo de 5 chars (cuerpo + checksum). Al cambiar, se resetea el estado de lookup.
 - **Al completar el 5º carácter** (`onDeviceCodeChange` → `resolveDeviceCode`):
-  1. **Checksum local** (`DeviceCode.isValidSuffix`): si falla → `DeviceLookupState.Invalid` → aviso rojo «Código inválido» (sin llamar a la API).
+  1. **Checksum local** (`DeviceCode.isValidSuffix` = nanoId): si falla → `DeviceLookupState.Invalid` → aviso rojo «Código inválido» (sin llamar a la API).
   2. Si pasa → `AdoptionRepository.lookup("SH-XXXXC")` → `GET /api/adoption/devices/:deviceCode`:
      - `200 status=available` → `Available` (verde «Controlador encontrado: <modelo>») + `ResolvedDevice` con MAC.
      - `200 status=assigned` → `Assigned` (rojo «Este controlador ya está asignado»).
@@ -215,7 +215,7 @@ Propiedades derivadas en `AdoptionUiState`:
 |---------------|--------|
 | UI pasos 1–2 | **Real** (Compose) |
 | Tema M3 Habitergy | **Real** |
-| Validación checksum device_code | **Real** (`domain/DeviceCode.kt`, réplica de `@habitergy/utils`) |
+| Validación checksum device_code | **Real** (`domain/DeviceCode.kt`, réplica de `nanoId.ts`) |
 | Lookup deviceCode → MAC/model/status | **Real** (`AdoptionRepository` → `GET /api/adoption/devices/:deviceCode`) |
 | Cliente HTTP (Ktor) | **Real** |
 | Escaneo QR | **Placeholder** (botón + snackbar «Coming soon») |
@@ -245,7 +245,7 @@ Al implementar escaneo/conexión real, reutilizar la lógica documentada en Mana
 | Manufacturer ID Allterco | `0x0BA9` — `apps/manager/src/lib/bluetooth/shellyManufacturerData.ts` |
 | Modelos soportados | Gen3 `0x1019`, Gen4 `0x1029` — `shellyModels.ts` |
 | RPC-over-BLE flag | bit 2 en manufacturer data |
-| Formato device_code en BD | `SH-XXXXC` (SH- + 4 cuerpo + 1 checksum) — `packages/utils/src/shortCode.ts`, `isValidDeviceCode()` |
+| Formato device_code en BD | `SH-XXXXC` (prefijo `SH-` + sufijo nanoId) — `packages/utils/src/shortCode.ts` delega en `nanoId.ts` |
 | Tabla devices | `mac_address`, `device_code`, `model`, `status` — `packages/database/schema.prisma` |
 
 Manager también tiene parsing de anuncios en `shellyAdvertisement.ts` — portar a Kotlin en `data/ble/` cuando corresponda.
@@ -267,7 +267,7 @@ Cliente HTTP: **Ktor Client** en `data/api/` (`AdoptionApi`), base URL en `ApiCo
 1. **No mezclar con pnpm:** no agregar Link a `pnpm-workspace.yaml` ni `turbo.json` salvo tarea documental explícita.
 2. **Mantener continuidad visual con Manager:** cambios de tokens → actualizar `packages/design-tokens/habitergy-m3.json` + `ui/theme/`.
 3. **ViewModel + StateFlow:** nueva lógica de wizard en `AdoptionViewModel`; Composables solo renderizan estado.
-4. **Checksum device_code en sync:** `domain/DeviceCode.kt` es réplica exacta de `packages/utils/src/shortCode.ts`. Cualquier cambio en el algoritmo debe replicarse en ambos lados. Para I/O nueva, crear un repositorio en `data/` e inyectarlo en el ViewModel.
+4. **Checksum unificado (nanoId):** `domain/DeviceCode.kt` replica `packages/utils/src/nanoId.ts` (mismo algoritmo que `siteCode`). `shortCode.ts` solo agrega el prefijo `SH-`. Cualquier cambio en nanoId debe replicarse en Kotlin. Para I/O nueva, crear un repositorio en `data/` e inyectarlo en el ViewModel.
 5. **Textos en español (es-AR).**
 6. **minSdk 26** — no bajar sin justificación (BLE moderno).
 7. Al agregar paso 3+: incrementar navegación en `AdoptionFlow.kt`, reutilizar `AdoptionScreenScaffold`, mantener `totalSteps = 6` alineado al producto.
@@ -278,7 +278,7 @@ Cliente HTTP: **Ktor Client** en `data/api/` (`AdoptionApi`), base URL en `ApiCo
 - [ ] BLE real: `BluetoothLeScanner` + filtro Allterco + parseo manufacturer data
 - [ ] QR real: CameraX + ML Kit / ZXing
 - [x] API lookup: `GET /api/adoption/devices/:deviceCode` (paso 1)
-- [x] Validación checksum `device_code` (SH-XXXXC) client + backend
+- [x] Validación checksum unificada nanoId (`siteCode` + `deviceCode` SH-XXXXC)
 - [ ] Login partner (JWT) al abrir Link o vía token en deep link
 - [ ] Paso 3: WiFi SSID + contraseña → RPC-over-BLE al Shelly
 - [ ] Pasos 4–6: MQTT config, espera online, asignar alojamiento

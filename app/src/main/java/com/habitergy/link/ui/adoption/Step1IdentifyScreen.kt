@@ -42,6 +42,7 @@ import kotlinx.coroutines.launch
 fun Step1IdentifyScreen(
     state: AdoptionUiState,
     onDeviceCodeChange: (String) -> Unit,
+    onDeviceCodeComplete: (String) -> Unit,
     onScanQrClick: () -> Unit,
     onProceedWithoutCode: () -> Unit,
     onNext: () -> Unit,
@@ -64,13 +65,14 @@ fun Step1IdentifyScreen(
                     imageContentDescription = "Código QR del controlador en el kit de instalación",
                     title = "Identificá el controlador",
                     subtitle = "En el kit de instalación vas a encontrar un código único " +
-                        "(ej: SH-ABCDQ) junto con un QR. Ingresá los 5 caracteres después de SH- " +
+                        "(ej: SH-KX67W) junto con un QR. Ingresá los 5 caracteres después de SH- " +
                         "o escanealo con la cámara.",
                 )
 
                 DeviceCodeInput(
                     code = state.deviceCodeInput,
                     onCodeChange = onDeviceCodeChange,
+                    onCodeComplete = onDeviceCodeComplete,
                     lookupState = state.lookupState,
                     resolvedModel = state.resolvedDevice?.model,
                 )

@@ -25,9 +25,13 @@ class AdoptionViewModel(
     private val _uiState = MutableStateFlow(AdoptionUiState())
     val uiState: StateFlow<AdoptionUiState> = _uiState.asStateFlow()
 
+    /**
+     * Actualiza el sufijo tipeado sin disparar validación. Se invoca mientras el
+     * usuario completa los recuadros anteriores al último; resetea el estado de
+     * lookup para que no quede un resultado obsoleto.
+     */
     fun onDeviceCodeChange(value: String) {
         val sanitized = DeviceCode.normalizeSuffix(value).take(DEVICE_CODE_LENGTH)
-
         _uiState.update {
             it.copy(
                 deviceCodeInput = sanitized,
@@ -36,7 +40,23 @@ class AdoptionViewModel(
                 lookupState = DeviceLookupState.Idle,
             )
         }
+    }
 
+    /**
+     * Se invoca al escribir el carácter del último recuadro (o al pegar un código
+     * que lo completa). Recién ahí corre la validación local de checksum y, si
+     * pasa, el lookup en la base de datos.
+     */
+    fun onDeviceCodeComplete(value: String) {
+        val sanitized = DeviceCode.normalizeSuffix(value).take(DEVICE_CODE_LENGTH)
+        _uiState.update {
+            it.copy(
+                deviceCodeInput = sanitized,
+                identificationMode = IdentificationMode.WithCode,
+                resolvedDevice = null,
+                lookupState = DeviceLookupState.Idle,
+            )
+        }
         if (sanitized.length == DEVICE_CODE_LENGTH && sanitized != UNKNOWN_DEVICE_CODE) {
             resolveDeviceCode(sanitized)
         }

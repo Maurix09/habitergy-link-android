@@ -3,17 +3,18 @@ package com.habitergy.link.domain
 /**
  * Validación de device_code (formato SH-XXXXC) en el cliente.
  *
- * Réplica EXACTA del algoritmo del backend en
- * `packages/utils/src/shortCode.ts`. Cualquier cambio aquí debe replicarse
- * en el backend y viceversa.
+ * Comparte el mismo algoritmo nanoId que site_code (alfabeto de 25 chars,
+ * checksum mod 25). Fuente de verdad en `packages/utils/src/nanoId.ts`.
  *
- * Estructura: prefijo "SH-" (fijo) + 4 caracteres de cuerpo + 1 carácter de
- * checksum calculado sobre el cuerpo. El usuario tipea solo el sufijo de 5
- * caracteres (cuerpo + checksum); el prefijo lo muestra la UI.
+ *   siteCode   → XXXXC      (ej. KX67W)
+ *   deviceCode → SH-XXXXC   (ej. SH-KX67W)
+ *
+ * El usuario tipea solo el sufijo de 5 caracteres; el prefijo SH- lo muestra la UI.
  */
 object DeviceCode {
     const val PREFIX = "SH-"
-    const val ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+    /** Mismo alfabeto que nanoId / siteCode (25 caracteres). */
+    const val ALPHABET = "BCDFGHJKMNPRTVWXYZ2346789"
     const val BODY_LENGTH = 4
     const val SUFFIX_LENGTH = 5
 
@@ -21,14 +22,14 @@ object DeviceCode {
 
     private fun charToIndex(char: Char): Int {
         val index = ALPHABET.indexOf(char)
-        require(index >= 0) { "Invalid device_code character: $char" }
+        require(index >= 0) { "Invalid nanoId character: $char" }
         return index
     }
 
-    /** Calcula el carácter de checksum de un cuerpo de 4 caracteres. */
+    /** Calcula el carácter de checksum de un cuerpo de 4 caracteres (nanoId). */
     fun computeChecksum(body: String): Char {
         require(body.length == BODY_LENGTH && body.all { it in ALPHABET }) {
-            "body must be $BODY_LENGTH valid characters from the alphabet"
+            "body must be $BODY_LENGTH valid characters from the nanoId alphabet"
         }
         var sum = 0
         for (i in body.indices) {
@@ -39,7 +40,7 @@ object DeviceCode {
 
     /**
      * Valida un sufijo de 5 caracteres (cuerpo + checksum), sin el prefijo.
-     * Devuelve true solo si el checksum calculado coincide con el 5º carácter.
+     * Equivalente a isValidNanoId() en el backend.
      */
     fun isValidSuffix(suffix: String): Boolean {
         val normalized = suffix.trim().uppercase()

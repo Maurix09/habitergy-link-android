@@ -15,6 +15,7 @@ fun AdoptionFlow(
         1 -> Step1IdentifyScreen(
             state = state,
             onDeviceCodeChange = viewModel::onDeviceCodeChange,
+            onDeviceCodeComplete = viewModel::onDeviceCodeComplete,
             onScanQrClick = viewModel::onScanQrClick,
             onProceedWithoutCode = viewModel::proceedWithoutKnownCode,
             onNext = viewModel::proceedToStep2,
@@ -27,6 +28,7 @@ fun AdoptionFlow(
         else -> Step1IdentifyScreen(
             state = state.copy(currentStep = 1),
             onDeviceCodeChange = viewModel::onDeviceCodeChange,
+            onDeviceCodeComplete = viewModel::onDeviceCodeComplete,
             onScanQrClick = viewModel::onScanQrClick,
             onProceedWithoutCode = viewModel::proceedWithoutKnownCode,
             onNext = viewModel::proceedToStep2,

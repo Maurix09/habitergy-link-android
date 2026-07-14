@@ -2,12 +2,15 @@
 
 App nativa Android para la **adopción de controladores Shelly** en Habitergy. Comparte el design system M3 con `@habitergy/manager` (ver `packages/design-tokens/habitergy-m3.json`).
 
+**Versión actual:** ver `version.properties` (publicada en https://github.com/Maurix09/habitergy-link-android).
+
 ## Requisitos
 
 - Android Studio Ladybug (2024.2+) o más reciente
 - JDK 17
 - Android SDK 35
 - Emulador API 34+ (recomendado: Pixel 6)
+- API local en `http://localhost:3000` (el emulador usa `http://10.0.2.2:3000`)
 
 ## Abrir el proyecto
 
@@ -24,58 +27,69 @@ cd apps/link-android
 ./gradlew :app:installDebug   # requiere emulador/dispositivo conectado
 ```
 
-## Flujo actual (mock)
+## Códigos de controlador
 
-### Paso 1 — Identificá el controlador
+Los `device_code` comparten el algoritmo **nanoId** con los `siteCode` de alojamientos:
 
-- Ingresar código (`CX123`, `SH-AB12`, `SH-T3ST`) → lookup mock de MAC en “base de datos”
-- **Escanear QR** → simula lectura de `CX123` (sin cámara en esta iteración)
-- **No tengo el código** → modo adopción sin MAC conocida
-- **Siguiente** → paso 2
+| Tipo | Formato | Ejemplo |
+|------|---------|---------|
+| Alojamiento (`siteCode`) | `XXXXC` | `KX67W` |
+| Controlador (`deviceCode`) | `SH-XXXXC` | `SH-KX67W` |
 
-### Paso 2 — Bluetooth
+En el paso 1, la UI muestra el prefijo `SH-` fijo y el usuario ingresa los **5 caracteres del sufijo** (cuerpo + checksum). El mismo sufijo `KX67W` es válido tanto como site como como parte de `SH-KX67W`.
 
-- Escaneo BLE simulado (~2 s)
-- **Con MAC (paso 1 con código):** banner “Controlador encontrado” si coincide
-- **Sin MAC:** lista para elegir manualmente entre Shellys mock
-- **Continuar** → diálogo placeholder del paso 3 (WiFi)
+Para probar con datos de seed:
 
-## Códigos mock
+```bash
+pnpm --filter @habitergy/database seed
+# Imprime: Adoptable device (available): SH-XXXXX
+```
 
-| Código   | MAC                 | Modelo           |
-|----------|---------------------|------------------|
-| CX123    | 3C:E8:1A:12:34:56   | Shelly 1PM Gen3  |
-| SH-AB12  | 3C:E8:1A:12:34:56   | Shelly 1PM Gen3  |
-| SH-T3ST  | 8A:13:BF:AB:CD:EF   | Shelly 1PM Gen4  |
+## Flujo actual
+
+### Paso 1 — Identificá el controlador (real)
+
+- Ingresar sufijo de 5 chars → validación **checksum nanoId** local
+- Si el checksum es válido → `GET /api/adoption/devices/SH-XXXXC`
+- Estados: disponible (verde), asignado, no encontrado, error de red
+- **Escanear QR** → placeholder («Coming soon»)
+- **¿No tenés el código?** → avanza al paso 2 sin MAC
+
+### Paso 2 — Bluetooth (placeholder)
+
+- Pantalla informativa; escaneo BLE real pendiente
 
 ## Estructura
 
 ```
 app/src/main/java/com/habitergy/link/
 ├── MainActivity.kt
-├── data/mock/MockAdoptionData.kt
-├── domain/model/AdoptionModels.kt
+├── domain/
+│   ├── DeviceCode.kt          # Sufijo nanoId + prefijo SH-
+│   └── model/AdoptionModels.kt
+├── data/
+│   ├── api/                   # Ktor → apps/api
+│   └── AdoptionRepository.kt
 └── ui/
-    ├── adoption/          # ViewModel + pantallas paso 1–2
-    ├── components/        # Scaffold, botones, tarjetas Shelly
-    └── theme/             # Tokens M3 Habitergy
+    ├── adoption/              # ViewModel + pantallas paso 1–2
+    ├── components/
+    └── theme/
 ```
 
 ## Próximos pasos
 
 - [ ] BLE real (`BluetoothLeScanner` + filtros Allterco)
 - [ ] QR con CameraX + ML Kit
-- [ ] API real `GET /api/devices/code/{deviceCode}`
+- [x] API lookup `GET /api/adoption/devices/:deviceCode`
+- [x] Checksum nanoId unificado con `siteCode`
 - [ ] Paso 3: provisioning WiFi vía RPC-over-BLE
 - [ ] Deep link desde Manager PWA
 
 ## Relación con Manager
 
-Manager PWA sigue siendo el panel del partner. Link es el flujo de vinculación física del Shelly. En Android, el botón “Adoptar controlador” del Manager debería abrir Link vía App Link.
+Manager PWA sigue siendo el panel del partner. Link es el flujo de vinculación física del Shelly. En Android, el botón «Adoptar controlador» del Manager debería abrir Link vía App Link.
 
 ## Releases
-
-Versión actual definida en `version.properties`. Para publicar en GitHub:
 
 ```bash
 ./scripts/release.sh patch   # 0.1.x -> 0.1.(x+1), default
@@ -83,3 +97,5 @@ Versión actual definida en `version.properties`. Para publicar en GitHub:
 ```
 
 Repo standalone: https://github.com/Maurix09/habitergy-link-android
+
+Más contexto para agentes: `AGENTS.md`.
