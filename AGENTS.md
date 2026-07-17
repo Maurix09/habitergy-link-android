@@ -176,23 +176,23 @@ Colores: verde `HabitergyColors.Primary` (Available), rojo `HabitergyColors.Erro
 
 ### Paso 2 — Conectá por Bluetooth (`Step2BleScanScreen`)
 
-**Escaneo BLE real.** Al entrar (`LaunchedEffect`) la UI llama `refreshBleReadiness()`, que verifica en orden: soporte BLE → permisos de runtime → adaptador encendido → ubicación del sistema activa → arranca el escaneo. La máquina de estados `BleScanPhase` refleja cada situación:
+**Escaneo BLE real.** Al entrar (`LaunchedEffect`) la UI llama `refreshBleReadiness()`, que verifica en orden: soporte BLE → permisos de runtime → adaptador encendido → (solo Android ≤11) ubicación del sistema activa → arranca el escaneo. La máquina de estados `BleScanPhase` refleja cada situación:
 
 | Fase | Cuándo | UI |
 |------|--------|----|
 | `PermissionRequired` | faltan permisos | botón «Otorgar permisos» → `RequestMultiplePermissions` |
 | `BluetoothOff` | adaptador apagado | botón «Encender Bluetooth» → `BluetoothAdapter.ACTION_REQUEST_ENABLE` |
-| `LocationOff` | servicios de ubicación apagados | botón «Activar ubicación» → `Settings.ACTION_LOCATION_SOURCE_SETTINGS` |
-| `Scanning` | escaneando (timeout 15 s) | spinner «Buscando tu controlador…» |
-| `Matched` | (WithCode) MAC objetivo encontrada | `ControllerFoundBanner` + «Siguiente» deshabilitado (paso 3 pendiente) |
+| `LocationOff` | (≤11) servicios de ubicación apagados | botón «Activar ubicación» → `Settings.ACTION_LOCATION_SOURCE_SETTINGS` |
+| `Scanning` | escaneando (timeout 15 s) | spinner + **lista en vivo** de todo lo detectado (match o no); resalta el que coincide |
+| `Matched` | (WithCode) MAC objetivo encontrada | banner + lista con el match marcado + «Siguiente» deshabilitado (paso 3 pendiente) |
 | `DeviceList` | (NoCode) hay Shelly cercanos | lista `ShellyDeviceCard` seleccionable |
-| `NotFound` | (WithCode) no apareció la MAC | mensaje + «Buscar de nuevo» |
+| `NotFound` | (WithCode) no apareció la MAC | mensaje (+ MAC buscada) + lista del último escaneo + «Buscar de nuevo» |
 | `Empty` | (NoCode) ningún Shelly cerca | mensaje + «Buscar de nuevo» |
 | `Error` | BLE no soportado / fallo del escáner | `bleErrorMessage` + «Buscar de nuevo» |
 
-Escáner en `data/ble/` (`ShellyBleScanner` sobre `BluetoothLeScanner`, filtro por manufacturer ID Allterco `0x0BA9`, parseo de MAC/modelo en `ShellyManufacturerData.kt`, filtro Gen3 `0x1019`/Gen4 `0x1029`). El match compara la MAC anunciada (o `device.address`) contra `targetMacAddress` (normalizada).
+Escáner en `data/ble/` (`ShellyBleScanner` sobre `BluetoothLeScanner` **sin filtros de hardware**, parseo de MAC/modelo Allterco `0x0BA9` en `ShellyManufacturerData.kt`). El match compara la MAC anunciada (o `device.address`) contra `targetMacAddress` **normalizada** (sin `:` / guiones; ver `normalizeMac`).
 
-Permisos (`BlePermissions`): Android 12+ pide `BLUETOOTH_SCAN` + `BLUETOOTH_CONNECT` (este último hace falta para `ACTION_REQUEST_ENABLE`); Android ≤11 pide `ACCESS_FINE_LOCATION`. Mientras el manifiesto no declare `neverForLocation` en `BLUETOOTH_SCAN`, también se exige que los **servicios de ubicación** del sistema estén encendidos (`LocationOff` si no).
+Permisos (`BlePermissions`): Android 12+ pide `BLUETOOTH_SCAN` + `BLUETOOTH_CONNECT`; el manifiesto declara `neverForLocation` en `BLUETOOTH_SCAN` (no depende de ubicación). Android ≤11 pide `ACCESS_FINE_LOCATION` y exige servicios de ubicación ON (`LocationOff` si no).
 
 Navegación: `AdoptionFlow` hace `when (state.currentStep)`; back en paso 2 → `goBackToStep1()` (cancela el escaneo).
 
@@ -245,13 +245,13 @@ Propiedades derivadas en `AdoptionUiState`:
 ## 10. Permisos (`AndroidManifest.xml`)
 
 - `BLUETOOTH`, `BLUETOOTH_ADMIN` (maxSdk 30) — BLE legacy (Android ≤11)
-- `BLUETOOTH_SCAN` — escaneo BLE paso 2 (**en uso**, Android 12+)
+- `BLUETOOTH_SCAN` — escaneo BLE paso 2 (**en uso**, Android 12+), con `android:usesPermissionFlags="neverForLocation"`
 - `BLUETOOTH_CONNECT` — diálogo de encendido BT en paso 2 (**en uso**, Android 12+); también se reutilizará para GATT (paso 3)
-- `ACCESS_FINE_LOCATION` — BLE scan en Android ≤11 (**en uso**); en 12+ el runtime aún no lo pide, pero los **servicios de ubicación** del sistema deben estar activos mientras no haya `neverForLocation` en `BLUETOOTH_SCAN`
+- `ACCESS_FINE_LOCATION` (maxSdk 30) — BLE scan en Android ≤11 (**en uso**)
 - `CAMERA` (QR, futuro)
 - `INTERNET` — lookup HTTP contra `apps/api` (**en uso**)
 
-Runtime (`BlePermissions.required`): `BLUETOOTH_SCAN` + `BLUETOOTH_CONNECT` en API 31+; `ACCESS_FINE_LOCATION` en ≤11. Precondición extra: `BlePermissions.isLocationEnabled()` → fase `LocationOff` si falla.
+Runtime (`BlePermissions.required`): `BLUETOOTH_SCAN` + `BLUETOOTH_CONNECT` en API 31+; `ACCESS_FINE_LOCATION` en ≤11. Precondición extra solo en ≤11: `BlePermissions.isLocationEnabled()` → fase `LocationOff` si falla.
 
 `uses-feature`: `bluetooth_le` required; `camera` optional.
 `networkSecurityConfig`: solo HTTPS (sin cleartext).

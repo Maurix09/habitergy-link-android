@@ -10,14 +10,10 @@ import androidx.core.content.ContextCompat
 /**
  * Permisos de runtime y precondiciones del sistema para escanear por BLE.
  *
- * - Android 12+ (API 31): `BLUETOOTH_SCAN` para descubrir + `BLUETOOTH_CONNECT`
- *   para el diálogo de encendido (`ACTION_REQUEST_ENABLE`). GATT del paso 3
- *   reutilizará `BLUETOOTH_CONNECT`.
- * - Android 11 y anteriores: el escaneo BLE requiere `ACCESS_FINE_LOCATION`.
- *
- * Además, mientras el manifiesto no declare `neverForLocation` en
- * `BLUETOOTH_SCAN`, Android no entrega resultados de escaneo si los
- * **servicios de ubicación** del sistema están apagados (también en ≤11).
+ * - Android 12+ (API 31): `BLUETOOTH_SCAN` (+ `neverForLocation` en el manifiesto)
+ *   y `BLUETOOTH_CONNECT` para el diálogo de encendido (`ACTION_REQUEST_ENABLE`).
+ * - Android 11 y anteriores: el escaneo BLE requiere `ACCESS_FINE_LOCATION` y
+ *   que los **servicios de ubicación** del sistema estén activos.
  */
 object BlePermissions {
     val required: Array<String> =
@@ -35,10 +31,11 @@ object BlePermissions {
     }
 
     /**
-     * Sin `neverForLocation` en el manifiesto, el stack BLE exige ubicación
-     * del sistema activa para devolver anuncios.
+     * En Android ≤11 el stack BLE no entrega anuncios si la ubicación del
+     * sistema está apagada. En 12+ con `neverForLocation` no hace falta.
      */
-    fun isLocationRequiredForScan(): Boolean = true
+    fun isLocationRequiredForScan(): Boolean =
+        Build.VERSION.SDK_INT < Build.VERSION_CODES.S
 
     fun isLocationEnabled(context: Context): Boolean {
         val manager = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager

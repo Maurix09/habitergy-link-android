@@ -22,6 +22,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.habitergy.link.domain.model.DiscoveredBleDevice
 import com.habitergy.link.ui.theme.HabitergyCardShape
@@ -32,33 +33,51 @@ fun BleDiscoveryList(
     devices: List<DiscoveredBleDevice>,
     modifier: Modifier = Modifier,
     header: String = "Dispositivos Bluetooth detectados",
+    /** Si no es null y la lista está vacía, muestra este mensaje en lugar de ocultarse. */
+    emptyMessage: String? = null,
 ) {
-    if (devices.isEmpty()) return
+    if (devices.isEmpty() && emptyMessage == null) return
 
     Column(
         modifier = modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Text(
-            text = header,
+            text = if (devices.isEmpty()) {
+                header
+            } else {
+                "$header (${devices.size})"
+            },
             style = MaterialTheme.typography.bodyMedium,
             color = HabitergyColors.TextSecondary,
         )
 
-        Column(
-            modifier = Modifier.fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            devices.forEach { device ->
-                AnimatedVisibility(
-                    visible = true,
-                    enter = fadeIn(animationSpec = tween(280)) +
-                        slideInVertically(
-                            animationSpec = tween(280),
-                            initialOffsetY = { it / 3 },
-                        ),
-                ) {
-                    DiscoveredBleDeviceRow(device = device)
+        if (devices.isEmpty()) {
+            Text(
+                text = emptyMessage.orEmpty(),
+                style = MaterialTheme.typography.bodyMedium,
+                color = HabitergyColors.TextSecondary,
+                textAlign = TextAlign.Center,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 12.dp),
+            )
+        } else {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                devices.forEach { device ->
+                    AnimatedVisibility(
+                        visible = true,
+                        enter = fadeIn(animationSpec = tween(280)) +
+                            slideInVertically(
+                                animationSpec = tween(280),
+                                initialOffsetY = { it / 3 },
+                            ),
+                    ) {
+                        DiscoveredBleDeviceRow(device = device)
+                    }
                 }
             }
         }
