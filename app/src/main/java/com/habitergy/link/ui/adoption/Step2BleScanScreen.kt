@@ -25,12 +25,21 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.habitergy.link.data.RuntimePermissions
+import com.habitergy.link.data.ble.BlePermissions
 import com.habitergy.link.data.ble.formatMac
+import com.habitergy.link.data.findActivity
 import com.habitergy.link.domain.model.AdoptionUiState
 import com.habitergy.link.domain.model.BleScanPhase
 import com.habitergy.link.ui.components.AdoptionScreenScaffold
@@ -56,9 +65,40 @@ fun Step2BleScanScreen(
     onNext: () -> Unit,
     onBack: () -> Unit,
 ) {
+    val context = LocalContext.current
+    val activity = remember(context) { context.findActivity() }
+    var permissionRequestedOnce by rememberSaveable { mutableStateOf(false) }
+    var openSettingsInstead by remember {
+        mutableStateOf(
+            activity != null &&
+                RuntimePermissions.shouldOpenAppSettings(
+                    activity = activity,
+                    permissions = BlePermissions.required,
+                    alreadyRequested = permissionRequestedOnce,
+                ),
+        )
+    }
+
+    fun refreshPermissionStrategy() {
+        openSettingsInstead = activity != null &&
+            RuntimePermissions.shouldOpenAppSettings(
+                activity = activity,
+                permissions = BlePermissions.required,
+                alreadyRequested = permissionRequestedOnce,
+            )
+    }
+
+    val appSettingsLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult(),
+    ) { onCheckReadiness() }
+
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
-    ) { onCheckReadiness() }
+    ) {
+        permissionRequestedOnce = true
+        refreshPermissionStrategy()
+        onCheckReadiness()
+    }
 
     val enableBluetoothLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult(),
@@ -67,6 +107,20 @@ fun Step2BleScanScreen(
     val enableLocationLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult(),
     ) { onCheckReadiness() }
+
+    fun requestBlePermissionOrOpenSettings() {
+        refreshPermissionStrategy()
+        if (openSettingsInstead) {
+            appSettingsLauncher.launch(RuntimePermissions.appDetailsSettingsIntent(context))
+        } else {
+            val missing = BlePermissions.missing(context)
+            if (missing.isEmpty()) {
+                onCheckReadiness()
+            } else {
+                permissionLauncher.launch(missing)
+            }
+        }
+    }
 
     LaunchedEffect(Unit) {
         // Al volver del paso 3 conservamos Matched/DeviceList; no re-escanear.
@@ -105,12 +159,17 @@ fun Step2BleScanScreen(
             when (state.bleScanPhase) {
                 BleScanPhase.PermissionRequired -> BleStatus(
                     icon = Icons.Default.LocationOn,
-                    message = "Necesitamos permiso de Bluetooth para buscar el controlador cercano.",
+                    message = if (openSettingsInstead) {
+                        "El permiso de Bluetooth está bloqueado. Abrí los ajustes de la app " +
+                            "y habilitalo para buscar el controlador."
+                    } else {
+                        "Necesitamos permiso de Bluetooth para buscar el controlador cercano."
+                    },
                     action = {
                         HabitergyPrimaryButton(
-                            label = "Otorgar permisos",
+                            label = if (openSettingsInstead) "Abrir ajustes" else "Otorgar permisos",
                             showArrow = false,
-                            onClick = { permissionLauncher.launch(bleRequiredPermissions()) },
+                            onClick = ::requestBlePermissionOrOpenSettings,
                         )
                     },
                 )
@@ -235,6 +294,15 @@ fun Step2BleScanScreen(
                             label = "Buscar de nuevo",
                             showArrow = false,
                             onClick = onRetry,
+                        )
+                        HabitergySecondaryButton(label = "Volver", onClick = onBack)
+                    }
+
+                    BleScanPhase.PermissionRequired -> {
+                        HabitergyPrimaryButton(
+                            label = if (openSettingsInstead) "Abrir ajustes" else "Otorgar permisos",
+                            showArrow = false,
+                            onClick = ::requestBlePermissionOrOpenSettings,
                         )
                         HabitergySecondaryButton(label = "Volver", onClick = onBack)
                     }
@@ -377,6 +445,3 @@ private fun BleStatus(
         }
     }
 }
-
-private fun bleRequiredPermissions(): Array<String> =
-    com.habitergy.link.data.ble.BlePermissions.required

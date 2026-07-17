@@ -43,16 +43,23 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.habitergy.link.data.RuntimePermissions
+import com.habitergy.link.data.findActivity
 import com.habitergy.link.data.wifi.WifiPermissions
 import com.habitergy.link.domain.model.AdoptionUiState
 import com.habitergy.link.domain.model.WifiNetwork
@@ -70,6 +77,10 @@ import kotlinx.coroutines.launch
  *
  * SSID prellenado con la red del teléfono, editable (redes ocultas), con ícono
  * para elegir otra señal. Contraseña opcional (red abierta).
+ *
+ * Permisos: se piden **antes** de abrir el bottom sheet (el diálogo del sistema
+ * no se muestra bien desde un ModalBottomSheet). Si están denegados de forma
+ * permanente, se abre Ajustes de la app.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -86,13 +97,74 @@ fun Step3WifiScreen(
     onContinue: () -> Boolean,
     onBack: () -> Unit,
 ) {
+    val context = LocalContext.current
+    val activity = remember(context) { context.findActivity() }
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
+    var permissionRequestedOnce by rememberSaveable { mutableStateOf(false) }
+    var openSettingsInstead by remember {
+        mutableStateOf(
+            activity != null &&
+                RuntimePermissions.shouldOpenAppSettings(
+                    activity = activity,
+                    permissions = WifiPermissions.required,
+                    alreadyRequested = permissionRequestedOnce,
+                ),
+        )
+    }
+
+    fun refreshPermissionStrategy() {
+        openSettingsInstead = activity != null &&
+            RuntimePermissions.shouldOpenAppSettings(
+                activity = activity,
+                permissions = WifiPermissions.required,
+                alreadyRequested = permissionRequestedOnce,
+            )
+    }
+
+    val appSettingsLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult(),
+    ) {
+        if (WifiPermissions.allGranted(context)) {
+            onOpenNetworkSheet()
+        } else {
+            refreshPermissionStrategy()
+            scope.launch {
+                snackbarHostState.showSnackbar(
+                    "Sin el permiso de WiFi no podemos listar las redes cercanas.",
+                )
+            }
+        }
+    }
+
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
-    ) { onRefreshWifiScan() }
+    ) { results ->
+        permissionRequestedOnce = true
+        val granted = WifiPermissions.allGranted(context) ||
+            (results.isNotEmpty() && results.values.all { granted -> granted })
+        val needsSettings = activity != null &&
+            RuntimePermissions.shouldOpenAppSettings(
+                activity = activity,
+                permissions = WifiPermissions.required,
+                alreadyRequested = true,
+            )
+        openSettingsInstead = needsSettings
+        if (granted) {
+            onOpenNetworkSheet()
+        } else if (needsSettings) {
+            // Android ya no muestra el diálogo → ficha de la app en Ajustes.
+            appSettingsLauncher.launch(RuntimePermissions.appDetailsSettingsIntent(context))
+        } else {
+            scope.launch {
+                snackbarHostState.showSnackbar(
+                    "Necesitamos permiso para ver las redes WiFi. Tocá el ícono de nuevo.",
+                )
+            }
+        }
+    }
 
     val locationSettingsLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult(),
@@ -101,6 +173,29 @@ fun Step3WifiScreen(
     val wifiSettingsLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult(),
     ) { onRefreshWifiScan() }
+
+    fun requestWifiPermissionOrOpenSettings() {
+        refreshPermissionStrategy()
+        if (openSettingsInstead) {
+            appSettingsLauncher.launch(RuntimePermissions.appDetailsSettingsIntent(context))
+        } else {
+            val missing = WifiPermissions.missing(context)
+            if (missing.isEmpty()) {
+                onOpenNetworkSheet()
+            } else {
+                permissionLauncher.launch(missing)
+            }
+        }
+    }
+
+    fun onSearchNetworksClick() {
+        if (WifiPermissions.allGranted(context)) {
+            onOpenNetworkSheet()
+        } else {
+            // Pedir permiso ANTES de abrir el sheet (diálogo del sistema).
+            requestWifiPermissionOrOpenSettings()
+        }
+    }
 
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
@@ -134,7 +229,7 @@ fun Step3WifiScreen(
                         }
                     },
                     trailingIcon = {
-                        IconButton(onClick = onOpenNetworkSheet) {
+                        IconButton(onClick = ::onSearchNetworksClick) {
                             Icon(
                                 imageVector = Icons.Default.WifiFind,
                                 contentDescription = "Buscar otras redes",
@@ -226,9 +321,8 @@ fun Step3WifiScreen(
         ) {
             WifiNetworkSheetContent(
                 state = state,
-                onRequestPermission = {
-                    permissionLauncher.launch(WifiPermissions.required)
-                },
+                openSettingsInstead = openSettingsInstead,
+                onRequestPermission = ::requestWifiPermissionOrOpenSettings,
                 onOpenLocationSettings = {
                     locationSettingsLauncher.launch(
                         Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS),
@@ -247,6 +341,7 @@ fun Step3WifiScreen(
 @Composable
 private fun WifiNetworkSheetContent(
     state: AdoptionUiState,
+    openSettingsInstead: Boolean,
     onRequestPermission: () -> Unit,
     onOpenLocationSettings: () -> Unit,
     onOpenWifiSettings: () -> Unit,
@@ -280,8 +375,13 @@ private fun WifiNetworkSheetContent(
         when (state.wifiScanPhase) {
             WifiScanPhase.PermissionRequired -> WifiSheetStatus(
                 icon = Icons.Default.Wifi,
-                message = "Necesitamos permiso para ver las redes WiFi cercanas.",
-                actionLabel = "Otorgar permisos",
+                message = if (openSettingsInstead) {
+                    "El permiso está bloqueado. Abrí los ajustes de la app y " +
+                        "habilitá el acceso a dispositivos cercanos / ubicación."
+                } else {
+                    "Necesitamos permiso para ver las redes WiFi cercanas."
+                },
+                actionLabel = if (openSettingsInstead) "Abrir ajustes" else "Otorgar permisos",
                 onAction = onRequestPermission,
             )
 

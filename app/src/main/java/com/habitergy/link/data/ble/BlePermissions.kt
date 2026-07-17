@@ -2,10 +2,9 @@ package com.habitergy.link.data.ble
 
 import android.Manifest
 import android.content.Context
-import android.content.pm.PackageManager
 import android.location.LocationManager
 import android.os.Build
-import androidx.core.content.ContextCompat
+import com.habitergy.link.data.RuntimePermissions
 
 /**
  * Permisos de runtime y precondiciones del sistema para escanear por BLE.
@@ -26,9 +25,11 @@ object BlePermissions {
             arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
         }
 
-    fun allGranted(context: Context): Boolean = required.all { permission ->
-        ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
-    }
+    fun allGranted(context: Context): Boolean =
+        RuntimePermissions.allGranted(context, required)
+
+    fun missing(context: Context): Array<String> =
+        RuntimePermissions.missing(context, required)
 
     /**
      * En Android ≤11 el stack BLE no entrega anuncios si la ubicación del

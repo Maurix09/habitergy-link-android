@@ -2,10 +2,9 @@ package com.habitergy.link.data.wifi
 
 import android.Manifest
 import android.content.Context
-import android.content.pm.PackageManager
 import android.location.LocationManager
 import android.os.Build
-import androidx.core.content.ContextCompat
+import com.habitergy.link.data.RuntimePermissions
 
 /**
  * Permisos de runtime para leer la red actual y escanear SSIDs cercanos.
@@ -21,9 +20,11 @@ object WifiPermissions {
             arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
         }
 
-    fun allGranted(context: Context): Boolean = required.all { permission ->
-        ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
-    }
+    fun allGranted(context: Context): Boolean =
+        RuntimePermissions.allGranted(context, required)
+
+    fun missing(context: Context): Array<String> =
+        RuntimePermissions.missing(context, required)
 
     /** En API ≤32 el stack WiFi no entrega SSIDs si la ubicación del sistema está apagada. */
     fun isLocationRequiredForScan(): Boolean =
