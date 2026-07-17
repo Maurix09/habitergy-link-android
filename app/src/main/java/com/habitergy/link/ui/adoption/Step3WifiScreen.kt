@@ -95,7 +95,7 @@ fun Step3WifiScreen(
     onRefreshCurrentSsid: () -> Unit,
     onRefreshWifiScan: () -> Unit,
     onRetryWifiScan: () -> Unit,
-    onContinue: () -> Boolean,
+    onContinue: () -> Unit,
     onBack: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -310,15 +310,7 @@ fun Step3WifiScreen(
                 HabitergyPrimaryButton(
                     label = "Siguiente",
                     enabled = state.canProceedFromStep3,
-                    onClick = {
-                        if (onContinue()) {
-                            scope.launch {
-                                snackbarHostState.showSnackbar(
-                                    "Configuración del controlador: próximamente",
-                                )
-                            }
-                        }
-                    },
+                    onClick = onContinue,
                 )
             },
         )

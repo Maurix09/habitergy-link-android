@@ -130,6 +130,36 @@ enum class WifiScanPhase {
     Error,
 }
 
+/** Sub-pasos de configuración Shelly vía BLE (paso 4). */
+enum class ShellyProvisionStep {
+    DisableCloud,
+    SetDeviceName,
+    ConfigureWifi,
+    ConfigureMqtt,
+    SetAdminAuth,
+    Reboot,
+}
+
+/** Fases del paso 4 (provisioner + configuración BLE). */
+enum class ProvisionPhase {
+    Idle,
+    ProvisioningBroker,
+    ConnectingBle,
+    ConfiguringShelly,
+    Rebooting,
+    Done,
+    Error,
+}
+
+/** Fases del paso 5 (espera de conexión MQTT). */
+enum class OnlineWaitPhase {
+    Idle,
+    Waiting,
+    Online,
+    Timeout,
+    Error,
+}
+
 data class AdoptionUiState(
     val currentStep: Int = 1,
     val totalSteps: Int = 6,
@@ -155,6 +185,13 @@ data class AdoptionUiState(
     val wifiScanErrorMessage: String? = null,
     val showWifiNetworkSheet: Boolean = false,
     val wifiRetryEnabled: Boolean = true,
+    // Paso 4
+    val provisionPhase: ProvisionPhase = ProvisionPhase.Idle,
+    val shellyProvisionStep: ShellyProvisionStep? = null,
+    val provisionErrorMessage: String? = null,
+    // Paso 5
+    val onlineWaitPhase: OnlineWaitPhase = OnlineWaitPhase.Idle,
+    val onlineWaitErrorMessage: String? = null,
 ) {
     val isUnknownDeviceCode: Boolean
         get() = deviceCodeInput == UNKNOWN_DEVICE_CODE
@@ -173,7 +210,15 @@ data class AdoptionUiState(
         }
 
     val canProceedFromStep3: Boolean
-        get() = wifiSsid.trim().isNotEmpty()
+        get() = wifiSsid.trim().isNotEmpty() &&
+            resolvedDevice != null &&
+            identificationMode == IdentificationMode.WithCode
+
+    val canStartStep4: Boolean
+        get() = resolvedDevice != null && selectedDevice != null
+
+    val shortCode: String?
+        get() = resolvedDevice?.deviceCode?.removePrefix("SH-")
 
     val wifiSsidError: Boolean
         get() = wifiSsidTouched && wifiSsid.trim().isEmpty()

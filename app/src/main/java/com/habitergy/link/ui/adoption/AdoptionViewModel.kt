@@ -4,7 +4,12 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.habitergy.link.data.AdoptionLookupResult
+import com.habitergy.link.data.AdoptionOnlineResult
+import com.habitergy.link.data.AdoptionProvisionResult
 import com.habitergy.link.data.AdoptionRepository
+import com.habitergy.link.data.ble.ShellyBleRpcClient
+import com.habitergy.link.data.ble.ShellyBleRpcException
+import com.habitergy.link.data.ble.ShellyDeviceProvisioner
 import com.habitergy.link.data.ble.BleAdvertisement
 import com.habitergy.link.data.ble.BlePermissions
 import com.habitergy.link.data.ble.ShellyBleScanner
@@ -21,10 +26,14 @@ import com.habitergy.link.domain.model.DEVICE_CODE_LENGTH
 import com.habitergy.link.domain.model.DeviceLookupState
 import com.habitergy.link.domain.model.DiscoveredBleDevice
 import com.habitergy.link.domain.model.IdentificationMode
+import com.habitergy.link.domain.model.OnlineWaitPhase
+import com.habitergy.link.domain.model.ProvisionPhase
 import com.habitergy.link.domain.model.ResolvedDevice
 import com.habitergy.link.domain.model.ScannedShellyDevice
+import com.habitergy.link.domain.model.ShellyProvisionStep
 import com.habitergy.link.domain.model.UNKNOWN_DEVICE_CODE
 import com.habitergy.link.domain.model.WifiScanPhase
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
@@ -43,6 +52,8 @@ class AdoptionViewModel(
     private val repository: AdoptionRepository = AdoptionRepository()
     private val bleScanner: ShellyBleScanner = ShellyBleScanner(application)
     private val wifiHelper: WifiNetworkHelper = WifiNetworkHelper(application)
+    private val shellyRpcClient: ShellyBleRpcClient = ShellyBleRpcClient(application)
+    private val shellyProvisioner: ShellyDeviceProvisioner = ShellyDeviceProvisioner(shellyRpcClient)
 
     private val _uiState = MutableStateFlow(AdoptionUiState())
     val uiState: StateFlow<AdoptionUiState> = _uiState.asStateFlow()
@@ -51,6 +62,8 @@ class AdoptionViewModel(
     private var scanJob: Job? = null
     private var wifiScanJob: Job? = null
     private var wifiRetryCooldownJob: Job? = null
+    private var provisionJob: Job? = null
+    private var onlinePollJob: Job? = null
 
     /**
      * Mantiene una única fuente de verdad para el código ingresado. Si el cambio
@@ -127,13 +140,245 @@ class AdoptionViewModel(
         }
     }
 
-    /**
-     * Guarda las credenciales WiFi en el estado. El aprovisionamiento BLE
-     * (paso 4) todavía no está implementado: la UI muestra un snackbar.
-     */
-    fun proceedFromStep3(): Boolean {
+    fun proceedFromStep3() {
         _uiState.update { it.copy(wifiSsidTouched = true) }
-        return _uiState.value.canProceedFromStep3
+        val state = _uiState.value
+        if (!state.canProceedFromStep3) return
+        cancelOnlinePoll()
+        shellyRpcClient.disconnect()
+        _uiState.update {
+            it.copy(
+                currentStep = 4,
+                provisionPhase = ProvisionPhase.Idle,
+                shellyProvisionStep = null,
+                provisionErrorMessage = null,
+                onlineWaitPhase = OnlineWaitPhase.Idle,
+                onlineWaitErrorMessage = null,
+            )
+        }
+    }
+
+    fun startStep4Provisioning() {
+        val state = _uiState.value
+        if (state.currentStep != 4) return
+        if (state.provisionPhase != ProvisionPhase.Idle &&
+            state.provisionPhase != ProvisionPhase.Error
+        ) {
+            return
+        }
+        if (!state.canStartStep4) {
+            _uiState.update {
+                it.copy(
+                    provisionPhase = ProvisionPhase.Error,
+                    provisionErrorMessage = "Necesitamos un código de controlador válido y una conexión Bluetooth.",
+                )
+            }
+            return
+        }
+        runStep4Provisioning()
+    }
+
+    fun retryStep4Provisioning() {
+        if (_uiState.value.currentStep != 4) return
+        shellyRpcClient.disconnect()
+        _uiState.update {
+            it.copy(
+                provisionPhase = ProvisionPhase.Idle,
+                shellyProvisionStep = null,
+                provisionErrorMessage = null,
+            )
+        }
+        runStep4Provisioning()
+    }
+
+    fun goBackToStep3() {
+        cancelProvision()
+        shellyRpcClient.disconnect()
+        _uiState.update {
+            it.copy(
+                currentStep = 3,
+                provisionPhase = ProvisionPhase.Idle,
+                shellyProvisionStep = null,
+                provisionErrorMessage = null,
+            )
+        }
+    }
+
+    fun startStep5OnlineWait() {
+        val state = _uiState.value
+        if (state.currentStep != 5) return
+        if (state.onlineWaitPhase == OnlineWaitPhase.Online) return
+        if (state.onlineWaitPhase == OnlineWaitPhase.Waiting) return
+        runOnlinePoll()
+    }
+
+    fun retryStep5OnlineWait() {
+        if (_uiState.value.currentStep != 5) return
+        runOnlinePoll()
+    }
+
+    fun goBackToStep4() {
+        cancelOnlinePoll()
+        _uiState.update {
+            it.copy(
+                currentStep = 4,
+                provisionPhase = ProvisionPhase.Done,
+                onlineWaitPhase = OnlineWaitPhase.Idle,
+                onlineWaitErrorMessage = null,
+            )
+        }
+    }
+
+    fun proceedToStep6() {
+        cancelOnlinePoll()
+        _uiState.update {
+            it.copy(
+                currentStep = 6,
+                onlineWaitPhase = OnlineWaitPhase.Online,
+            )
+        }
+    }
+
+    private fun runStep4Provisioning() {
+        cancelProvision()
+        val state = _uiState.value
+        val resolved = state.resolvedDevice ?: return
+        val selected = state.selectedDevice ?: return
+        val shortCode = state.shortCode ?: return
+
+        provisionJob = viewModelScope.launch {
+            try {
+                _uiState.update {
+                    it.copy(
+                        provisionPhase = ProvisionPhase.ProvisioningBroker,
+                        provisionErrorMessage = null,
+                        shellyProvisionStep = null,
+                    )
+                }
+
+                when (val brokerResult = repository.provision(resolved.deviceCode)) {
+                    is AdoptionProvisionResult.Success -> Unit
+                    is AdoptionProvisionResult.NotFound -> {
+                        failProvision("No encontramos el controlador en el sistema.")
+                        return@launch
+                    }
+                    is AdoptionProvisionResult.Conflict -> {
+                        failProvision("Este controlador ya no está disponible para adoptar.")
+                        return@launch
+                    }
+                    is AdoptionProvisionResult.ApiError -> {
+                        failProvision(brokerResult.message)
+                        return@launch
+                    }
+                    AdoptionProvisionResult.NetworkError -> {
+                        failProvision("No pudimos contactar al servidor. Revisá tu conexión a internet.")
+                        return@launch
+                    }
+                }
+
+                _uiState.update { it.copy(provisionPhase = ProvisionPhase.ConnectingBle) }
+                shellyRpcClient.connect(selected.id)
+
+                _uiState.update { it.copy(provisionPhase = ProvisionPhase.ConfiguringShelly) }
+                shellyProvisioner.configure(
+                    shortCode = shortCode,
+                    wifiSsid = state.wifiSsid.trim(),
+                    wifiPassword = state.wifiPassword,
+                    macAddress = selected.macAddress,
+                ) { step ->
+                    _uiState.update { it.copy(shellyProvisionStep = step) }
+                }
+
+                _uiState.update { it.copy(provisionPhase = ProvisionPhase.Rebooting) }
+                shellyRpcClient.disconnect()
+
+                _uiState.update {
+                    it.copy(
+                        provisionPhase = ProvisionPhase.Done,
+                        currentStep = 5,
+                        onlineWaitPhase = OnlineWaitPhase.Idle,
+                    )
+                }
+                runOnlinePoll()
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: ShellyBleRpcException) {
+                failProvision(error.message ?: "Error de comunicación Bluetooth con el controlador.")
+            } catch (error: Exception) {
+                failProvision(
+                    error.message ?: "No pudimos configurar el controlador. Intentá de nuevo.",
+                )
+            } finally {
+                shellyRpcClient.disconnect()
+            }
+        }
+    }
+
+    private fun failProvision(message: String) {
+        _uiState.update {
+            it.copy(
+                provisionPhase = ProvisionPhase.Error,
+                provisionErrorMessage = message,
+            )
+        }
+    }
+
+    private fun runOnlinePoll() {
+        cancelOnlinePoll()
+        val deviceCode = _uiState.value.resolvedDevice?.deviceCode ?: return
+
+        _uiState.update {
+            it.copy(
+                onlineWaitPhase = OnlineWaitPhase.Waiting,
+                onlineWaitErrorMessage = null,
+            )
+        }
+
+        onlinePollJob = viewModelScope.launch {
+            val deadline = System.currentTimeMillis() + ONLINE_WAIT_TIMEOUT_MS
+            while (System.currentTimeMillis() < deadline) {
+                when (val result = repository.getOnlineStatus(deviceCode)) {
+                    is AdoptionOnlineResult.Status -> {
+                        if (result.isOnline) {
+                            _uiState.update {
+                                it.copy(onlineWaitPhase = OnlineWaitPhase.Online)
+                            }
+                            return@launch
+                        }
+                    }
+                    AdoptionOnlineResult.NotFound -> {
+                        failOnlineWait("No encontramos el controlador en el sistema.")
+                        return@launch
+                    }
+                    AdoptionOnlineResult.NetworkError -> {
+                        // Seguir intentando hasta timeout.
+                    }
+                }
+                delay(ONLINE_POLL_INTERVAL_MS)
+            }
+            _uiState.update {
+                it.copy(onlineWaitPhase = OnlineWaitPhase.Timeout)
+            }
+        }
+    }
+
+    private fun failOnlineWait(message: String) {
+        _uiState.update {
+            it.copy(
+                onlineWaitPhase = OnlineWaitPhase.Error,
+                onlineWaitErrorMessage = message,
+            )
+        }
+    }
+
+    private fun cancelProvision() {
+        provisionJob?.cancel()
+        provisionJob = null
+    }
+
+    private fun cancelOnlinePoll() {
+        onlinePollJob?.cancel()
+        onlinePollJob = null
     }
 
     fun onWifiSsidChange(value: String) {
@@ -598,6 +843,9 @@ class AdoptionViewModel(
         cancelScan()
         cancelWifiScan()
         cancelWifiRetryCooldown()
+        cancelProvision()
+        cancelOnlinePoll()
+        shellyRpcClient.disconnect()
         super.onCleared()
     }
 
@@ -622,5 +870,7 @@ class AdoptionViewModel(
         private const val WIFI_RETRY_COOLDOWN_MS = 30_000L
         private const val WIFI_THROTTLED_MESSAGE =
             "Android no pudo iniciar una búsqueda nueva. Esperá unos segundos antes de reintentar."
+        private const val ONLINE_POLL_INTERVAL_MS = 3_000L
+        private const val ONLINE_WAIT_TIMEOUT_MS = 180_000L
     }
 }

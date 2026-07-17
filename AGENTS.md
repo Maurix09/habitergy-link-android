@@ -12,7 +12,7 @@ Este archivo provee contexto esencial para cualquier agente de IA (LLM) que deba
 | **Propósito** | Wizard nativo de adopción de controladores **Shelly 1PM Gen3/Gen4** (BLE, WiFi, provisioning) |
 | **Stack** | Kotlin + Jetpack Compose + Material 3 |
 | **Build** | Gradle ( **no** forma parte de pnpm/Turbo del monorepo ) |
-| **Versión actual** | `0.1.17` — pasos **1–3** (lookup API, escaneo BLE + match MAC, formulario WiFi + scan SSIDs) |
+| **Versión actual** | `0.1.18` — pasos **1–5** (lookup, BLE, WiFi, provisioner + RPC BLE, espera online) |
 | **Play Store (planeado)** | Habitergy Link |
 
 Link reemplaza el wizard web de adopción en Android: acceso nativo a BLE, WiFi y provisioning sin limitaciones de Web Bluetooth ni mixed content.
@@ -149,6 +149,8 @@ flowchart TD
   S1 -->|Siguiente| S2
   S2 -->|Siguiente| S3
   S3 -->|Siguiente| S4
+  S4 -->|auto| S5
+  S5 -->|Siguiente| S6
 ```
 
 ### Paso 1 — Identificá el controlador (`Step1IdentifyScreen`)
@@ -202,14 +204,14 @@ Navegación: volver solo con el ícono del header (flecha). Footer fijo con **Si
 
 ### Paso 3 — Conectalo a la red WiFi (`Step3WifiScreen`)
 
-Formulario M3: SSID + contraseña. Sin envío BLE aún (eso es paso 4).
+Formulario M3: SSID + contraseña. Requiere `resolvedDevice` (modo WithCode) para avanzar al paso 4.
 
 | Elemento | Comportamiento |
 |----------|----------------|
 | **SSID** | Prellenado con la red actual del teléfono (`WifiNetworkHelper.getCurrentSsid`). Editable (redes ocultas). |
 | **Ícono WiFi Find** | Abre `ModalBottomSheet` con escaneo de SSIDs **2,4 GHz**. Al elegir una red **solo completa el SSID**. |
 | **Contraseña** | Opcional (red abierta). Toggle show/hide. Supporting text «Sin contraseña» si vacío. |
-| **Siguiente** | Habilitado si SSID no vacío. Credenciales en estado; snackbar «próximamente» (paso 4 pendiente). |
+| **Siguiente** | Habilitado si SSID no vacío y hay `resolvedDevice`. Avanza al paso 4. |
 
 Escaneo WiFi (`WifiScanPhase`): `PermissionRequired` → `LocationOff` → `WifiOff` → `Scanning` → `Results` / `Empty` / `Error`. Usa callback nativo en API 30+, broadcast en API 26–29, timeout de 15 s y cooldown ante throttling.
 
@@ -217,9 +219,29 @@ Permisos (`WifiPermissions`): `ACCESS_COARSE_LOCATION` + `ACCESS_FINE_LOCATION` 
 
 Back → `goBackToStep2()` (conserva match BLE).
 
+### Paso 4 — Configurá el controlador (`Step4ConfigureScreen`)
+
+Al entrar arranca automáticamente el pipeline de aprovisionamiento:
+
+1. **Broker:** `POST /api/adoption/devices/:deviceCode/provision` → backend llama `POST /provisioner/devices/{shortCode}` (API key solo en servidor).
+2. **BLE GATT:** `ShellyBleRpcClient` reconecta al dispositivo del paso 2 y ejecuta RPC: `Cloud.SetConfig` (off), `Sys.SetConfig` (nombre `SH-{shortCode}`), `Wifi.SetConfig`, `Mqtt.SetConfig` (`topic_prefix`: `habitergy/v1/{shortCode}`), `Shelly.SetAuth`, `Shelly.Reboot`.
+3. Al éxito avanza al paso 5.
+
+UI: checklist de sub-pasos + spinner. Error → **Reintentar** / volver al paso 3.
+
+### Paso 5 — Esperando conexión (`Step5WaitingScreen`)
+
+Poll cada **3 s** a `GET /api/adoption/devices/:deviceCode/online` hasta `isOnline == true` (timeout 3 min). El mqtt-worker detecta mensajes en `habitergy/v1/{shortCode}/online` y actualiza `device_telemetry.is_online`.
+
+UI: animación «Esperando conexión». Online → **Siguiente** al paso 6 (stub). Timeout/error → **Reintentar**.
+
+### Paso 6 — Controlador listo (`Step6SuccessScreen`)
+
+Placeholder hasta asignar alojamiento (`site_id`).
+
 ## 7. Estado y lógica (`AdoptionViewModel`)
 
-Fuente única de verdad: `StateFlow<AdoptionUiState>`. Es un `AndroidViewModel` (necesita `Context` para BLE/WiFi); crea internamente `AdoptionRepository()`, `ShellyBleScanner` y `WifiNetworkHelper`.
+Fuente única de verdad: `StateFlow<AdoptionUiState>`. Es un `AndroidViewModel` (necesita `Context` para BLE/WiFi); crea internamente `AdoptionRepository()`, `ShellyBleScanner`, `WifiNetworkHelper`, `ShellyBleRpcClient` y `ShellyDeviceProvisioner`.
 
 Campos principales:
 
@@ -234,6 +256,12 @@ bleScanPhase, discoveredBleDevices, scannedDevices, matchedDevice, selectedDevic
 wifiSsid, wifiPassword, wifiPasswordVisible, wifiSsidTouched,
 wifiScanPhase, nearbyWifiNetworks, wifiScanErrorMessage, showWifiNetworkSheet
 
+// Paso 4
+provisionPhase, shellyProvisionStep, provisionErrorMessage
+
+// Paso 5
+onlineWaitPhase, onlineWaitErrorMessage
+
 // Navegación
 currentStep, totalSteps (= 6)
 ```
@@ -243,13 +271,19 @@ Propiedades derivadas en `AdoptionUiState`:
 - `isLookingUp` — `lookupState == Looking`
 - `canProceedFromStep1` — `lookupState == Available`
 - `canProceedFromStep2` — `Matched` con device, o `DeviceList` con selección
-- `canProceedFromStep3` — SSID no vacío
+- `canProceedFromStep3` — SSID no vacío + `resolvedDevice` (WithCode)
+- `canStartStep4` — `resolvedDevice` + `selectedDevice`
+- `shortCode` — sufijo sin `SH-`
 - `targetMacAddress` — MAC del `resolvedDevice` (null si NoCode)
 - `selectedDevice` — `matchedDevice` o el elegido en lista
 
 **Escaneo BLE (paso 2):** `refreshBleReadiness()`, `startBleScan()`, `retryBleScan()`, `selectDevice(id)`.
 
 **WiFi (paso 3):** `proceedToStep3()` (prellena SSID), `onWifiSsidChange` / `onWifiPasswordChange`, `openWifiNetworkSheet` / `selectWifiNetwork`, `refreshWifiScanReadiness()` / `retryWifiScan()`.
+
+**Provision (paso 4):** `startStep4Provisioning()`, `retryStep4Provisioning()`, `goBackToStep3()`.
+
+**Online wait (paso 5):** `startStep5OnlineWait()`, `retryStep5OnlineWait()`, `proceedToStep6()`.
 
 ## 8. Datos mock
 
@@ -259,17 +293,19 @@ Propiedades derivadas en `AdoptionUiState`:
 
 | Funcionalidad | Estado |
 |---------------|--------|
-| UI pasos 1–3 | **Real** (Compose) |
+| UI pasos 1–6 | **Real** (paso 6 = stub éxito) |
 | Tema M3 Habitergy | **Real** |
 | Validación checksum device_code | **Real** (`domain/DeviceCode.kt`, réplica de `nanoId.ts`) |
-| Lookup deviceCode → MAC/model/status | **Real** (`AdoptionRepository` → `GET /api/adoption/devices/:deviceCode`) |
+| Lookup deviceCode → MAC/model/status | **Real** (`GET /api/adoption/devices/:deviceCode`) |
+| Provision broker MQTT | **Real** (`POST /api/adoption/devices/:deviceCode/provision`) |
+| Poll online | **Real** (`GET /api/adoption/devices/:deviceCode/online`) |
 | Cliente HTTP (Ktor) | **Real** |
 | Escaneo QR | **Placeholder** (botón + snackbar «Coming soon») |
-| Escaneo BLE + match por MAC | **Real** (`data/ble/ShellyBleScanner`, filtro Allterco, permisos + BT check) |
-| Formulario WiFi + scan SSIDs | **Real** (`data/wifi/`, `Step3WifiScreen`) |
+| Escaneo BLE + match por MAC | **Real** (`ShellyBleScanner`) |
+| Formulario WiFi + scan SSIDs | **Real** (`Step3WifiScreen`) |
+| GATT / RPC-over-BLE Shelly | **Real** (`ShellyBleRpcClient`, `ShellyDeviceProvisioner`) |
+| Asignar alojamiento (paso 6) | **No implementado** |
 | Auth JWT / login | **No implementado** |
-| GATT / RPC-over-BLE Shelly | **No implementado** |
-| Envío WiFi al Shelly (paso 4+) | **No implementado** (credenciales quedan en estado) |
 | Deep link desde Manager | **No implementado** |
 
 ## 10. Permisos (`AndroidManifest.xml`)
@@ -334,8 +370,9 @@ Cliente HTTP: **Ktor Client** en `data/api/` (`AdoptionApi`), base URL en `ApiCo
 - [x] Validación checksum unificada nanoId (`siteCode` + `deviceCode` SH-XXXXC)
 - [ ] Login partner (JWT) al abrir Link o vía token en deep link
 - [x] Paso 3: formulario WiFi SSID + contraseña + scan SSIDs
-- [ ] Paso 4: RPC-over-BLE (WiFi + MQTT) al Shelly
-- [ ] Pasos 5–6: espera online, asignar alojamiento
+- [x] Paso 4: provisioner broker + RPC-over-BLE (WiFi + MQTT + auth + reboot)
+- [x] Paso 5: espera online (poll API cada 3 s)
+- [ ] Paso 6: asignar alojamiento
 - [ ] App Link: `https://app.habitergy.com/adoptar-controlador` → abre Link
 - [ ] Manager Android: botón «Adoptar» abre Link en lugar del wizard web
 

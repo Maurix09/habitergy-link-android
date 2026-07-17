@@ -43,6 +43,23 @@ fun AdoptionFlow(
             onContinue = viewModel::proceedFromStep3,
             onBack = viewModel::goBackToStep2,
         )
+        4 -> Step4ConfigureScreen(
+            state = state,
+            onStartProvisioning = viewModel::startStep4Provisioning,
+            onRetry = viewModel::retryStep4Provisioning,
+            onBack = viewModel::goBackToStep3,
+        )
+        5 -> Step5WaitingScreen(
+            state = state,
+            onStartWaiting = viewModel::startStep5OnlineWait,
+            onRetry = viewModel::retryStep5OnlineWait,
+            onNext = viewModel::proceedToStep6,
+            onBack = viewModel::goBackToStep4,
+        )
+        6 -> Step6SuccessScreen(
+            state = state,
+            onBack = viewModel::goBackToStep4,
+        )
         else -> Step1IdentifyScreen(
             state = state.copy(currentStep = 1),
             onDeviceCodeChange = viewModel::onDeviceCodeChange,

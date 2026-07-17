@@ -69,7 +69,22 @@ pnpm --filter @habitergy/database seed
 - Ícono para buscar otras señales 2,4 GHz → bottom sheet; al elegir solo completa el SSID
 - Escaneo con timeout, fallback de caché y cooldown ante throttling de Android
 - Contraseña opcional (red abierta) con show/hide
-- **Siguiente** guarda credenciales en estado; aprovisionamiento BLE = paso 4 (próximamente)
+- **Siguiente** guarda credenciales y avanza al paso 4 (requiere código válido del paso 1)
+
+### Paso 4 — Configuración Shelly (real)
+
+- Registra usuario MQTT en broker vía API (`POST .../provision`)
+- Reconecta por BLE GATT y envía RPC: Cloud off, nombre, WiFi, MQTT (`habitergy/v1/{shortCode}`), auth admin, reboot
+- Checklist visual + reintentar en error
+
+### Paso 5 — Esperando conexión (real)
+
+- Poll `GET .../online` cada 3 s (timeout 3 min)
+- Animación de espera; **Siguiente** al paso 6 cuando `isOnline`
+
+### Paso 6 — Éxito (stub)
+
+- Placeholder hasta asignar alojamiento
 
 ## Estructura
 
