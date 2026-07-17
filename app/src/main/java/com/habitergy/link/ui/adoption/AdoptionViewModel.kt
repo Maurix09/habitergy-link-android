@@ -13,6 +13,7 @@ import com.habitergy.link.data.ble.formatMac
 import com.habitergy.link.data.ble.normalizeMac
 import com.habitergy.link.data.wifi.WifiNetworkHelper
 import com.habitergy.link.data.wifi.WifiPermissions
+import com.habitergy.link.data.wifi.WifiScanTemporarilyUnavailableException
 import com.habitergy.link.domain.DeviceCode
 import com.habitergy.link.domain.model.AdoptionUiState
 import com.habitergy.link.domain.model.BleScanPhase
@@ -26,6 +27,7 @@ import com.habitergy.link.domain.model.UNKNOWN_DEVICE_CODE
 import com.habitergy.link.domain.model.WifiScanPhase
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -48,6 +50,7 @@ class AdoptionViewModel(
     private var activeLookupSuffix: String? = null
     private var scanJob: Job? = null
     private var wifiScanJob: Job? = null
+    private var wifiRetryCooldownJob: Job? = null
 
     /**
      * Mantiene una única fuente de verdad para el código ingresado. Si el cambio
@@ -88,6 +91,7 @@ class AdoptionViewModel(
     fun proceedToStep3() {
         if (!_uiState.value.canProceedFromStep2) return
         cancelScan()
+        cancelWifiRetryCooldown()
         // Navegar primero: leer el SSID nunca debe bloquear ni tumbar el paso 3.
         _uiState.update {
             it.copy(
@@ -97,16 +101,17 @@ class AdoptionViewModel(
                 wifiScanPhase = WifiScanPhase.Idle,
                 nearbyWifiNetworks = emptyList(),
                 wifiScanErrorMessage = null,
+                wifiRetryEnabled = true,
             )
         }
-        prefillCurrentWifiSsid()
+        refreshCurrentWifiSsid()
     }
 
     /**
      * Intenta completar el SSID con la red actual del teléfono.
      * Fallos de permiso / SecurityException se ignoran (campo queda vacío).
      */
-    private fun prefillCurrentWifiSsid() {
+    fun refreshCurrentWifiSsid() {
         viewModelScope.launch {
             val ssid = runCatching { wifiHelper.getCurrentSsid() }
                 .getOrNull()
@@ -186,6 +191,15 @@ class AdoptionViewModel(
 
     fun refreshWifiScanReadiness() {
         if (!_uiState.value.showWifiNetworkSheet) return
+        if (!_uiState.value.wifiRetryEnabled) {
+            _uiState.update {
+                it.copy(
+                    wifiScanPhase = WifiScanPhase.Error,
+                    wifiScanErrorMessage = WIFI_THROTTLED_MESSAGE,
+                )
+            }
+            return
+        }
         val app = getApplication<Application>()
         when {
             !WifiPermissions.allGranted(app) ->
@@ -200,6 +214,7 @@ class AdoptionViewModel(
     }
 
     fun retryWifiScan() {
+        if (!_uiState.value.wifiRetryEnabled) return
         refreshWifiScanReadiness()
     }
 
@@ -238,6 +253,17 @@ class AdoptionViewModel(
                                     wifiScanErrorMessage = null,
                                 )
                             }
+                        error is WifiScanTemporarilyUnavailableException -> {
+                            startWifiRetryCooldown()
+                            _uiState.update {
+                                it.copy(
+                                    wifiScanPhase = WifiScanPhase.Error,
+                                    wifiScanErrorMessage = error.message
+                                        ?: WIFI_THROTTLED_MESSAGE,
+                                    wifiRetryEnabled = false,
+                                )
+                            }
+                        }
                         else ->
                             _uiState.update {
                                 it.copy(
@@ -326,6 +352,7 @@ class AdoptionViewModel(
         cancelLookup()
         cancelScan()
         cancelWifiScan()
+        cancelWifiRetryCooldown()
         _uiState.update {
             it.copy(
                 currentStep = 2,
@@ -336,6 +363,7 @@ class AdoptionViewModel(
                 selectedDeviceId = null,
                 bleErrorMessage = null,
                 showWifiNetworkSheet = false,
+                wifiRetryEnabled = true,
             )
         }
     }
@@ -344,6 +372,7 @@ class AdoptionViewModel(
         cancelLookup()
         cancelScan()
         cancelWifiScan()
+        cancelWifiRetryCooldown()
         _uiState.update {
             it.copy(
                 currentStep = 1,
@@ -356,18 +385,21 @@ class AdoptionViewModel(
                 deviceCodeInput = if (it.isUnknownDeviceCode) "" else it.deviceCodeInput,
                 identificationMode = IdentificationMode.WithCode,
                 showWifiNetworkSheet = false,
+                wifiRetryEnabled = true,
             )
         }
     }
 
     fun goBackToStep2() {
         cancelWifiScan()
+        cancelWifiRetryCooldown()
         _uiState.update {
             it.copy(
                 currentStep = 2,
                 showWifiNetworkSheet = false,
                 wifiScanPhase = WifiScanPhase.Idle,
                 wifiScanErrorMessage = null,
+                wifiRetryEnabled = true,
                 // No reiniciar el escaneo BLE: conservamos el match/selección.
             )
         }
@@ -548,9 +580,24 @@ class AdoptionViewModel(
         wifiScanJob = null
     }
 
+    private fun startWifiRetryCooldown() {
+        cancelWifiRetryCooldown()
+        wifiRetryCooldownJob = viewModelScope.launch {
+            delay(WIFI_RETRY_COOLDOWN_MS)
+            _uiState.update { it.copy(wifiRetryEnabled = true) }
+            wifiRetryCooldownJob = null
+        }
+    }
+
+    private fun cancelWifiRetryCooldown() {
+        wifiRetryCooldownJob?.cancel()
+        wifiRetryCooldownJob = null
+    }
+
     override fun onCleared() {
         cancelScan()
         cancelWifiScan()
+        cancelWifiRetryCooldown()
         super.onCleared()
     }
 
@@ -572,5 +619,8 @@ class AdoptionViewModel(
         private const val STATUS_ASSIGNED = "assigned"
         private const val SCAN_TIMEOUT_MS = 15_000L
         private const val MIN_MAC_HEX = 6
+        private const val WIFI_RETRY_COOLDOWN_MS = 30_000L
+        private const val WIFI_THROTTLED_MESSAGE =
+            "Android no pudo iniciar una búsqueda nueva. Esperá unos segundos antes de reintentar."
     }
 }

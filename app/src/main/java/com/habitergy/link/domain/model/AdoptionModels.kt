@@ -154,6 +154,7 @@ data class AdoptionUiState(
     val nearbyWifiNetworks: List<WifiNetwork> = emptyList(),
     val wifiScanErrorMessage: String? = null,
     val showWifiNetworkSheet: Boolean = false,
+    val wifiRetryEnabled: Boolean = true,
 ) {
     val isUnknownDeviceCode: Boolean
         get() = deviceCodeInput == UNKNOWN_DEVICE_CODE

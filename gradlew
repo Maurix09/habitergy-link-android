@@ -88,6 +88,6 @@ if [ ! -e "$CLASSPATH" ] ; then
     die "ERROR: gradle-wrapper.jar not found at $CLASSPATH. Open the project in Android Studio to generate it."
 fi
 
-DEFAULT_JVM_OPTS='"-Xmx64m" "-Xms64m"'
+DEFAULT_JVM_OPTS="-Xmx64m -Xms64m"
 
 exec "$JAVACMD" $DEFAULT_JVM_OPTS -classpath "$CLASSPATH" org.gradle.wrapper.GradleWrapperMain "$@"

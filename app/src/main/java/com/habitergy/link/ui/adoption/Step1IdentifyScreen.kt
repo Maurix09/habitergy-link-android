@@ -55,12 +55,13 @@ fun Step1IdentifyScreen(
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         containerColor = Color.Transparent,
-    ) { _ ->
+    ) { innerPadding ->
         AdoptionScreenScaffold(
             currentStep = state.currentStep,
             totalSteps = state.totalSteps,
             onBack = onBack,
             showBackButton = false,
+            modifier = Modifier.padding(innerPadding),
             content = {
                 OnboardingHeroSection(
                     imageRes = R.drawable.device_qr,

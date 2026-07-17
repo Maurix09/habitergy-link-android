@@ -12,8 +12,10 @@ import android.net.wifi.WifiInfo
 import android.net.wifi.WifiManager
 import android.os.Build
 import android.util.Log
+import androidx.annotation.RequiresApi
 import com.habitergy.link.domain.model.WifiNetwork
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.coroutines.resume
 
 /**
@@ -21,7 +23,8 @@ import kotlin.coroutines.resume
  *
  * Importante: varias APIs de WifiManager / WifiInfo pueden lanzar
  * [SecurityException] si faltan permisos o la ubicación del sistema está
- * apagada. Nunca deben tumbar la Activity — siempre devolvemos null / vacío.
+ * apagada. Nunca deben tumbar la Activity: el escaneo propaga el error mediante
+ * [Result] para que la UI pueda explicar la causa real.
  */
 class WifiNetworkHelper(
     private val context: Context,
@@ -47,7 +50,7 @@ class WifiNetworkHelper(
         return try {
             if (!WifiPermissions.allGranted(appContext)) return null
 
-            // En API ≤32 el stack suele exigir ubicación del sistema ON.
+            // El escaneo/SSID requieren Location Services aun en Android moderno.
             if (WifiPermissions.isLocationRequiredForScan() &&
                 !WifiPermissions.isLocationEnabled(appContext)
             ) {
@@ -62,16 +65,14 @@ class WifiNetworkHelper(
                 val caps = network?.let { connectivity.getNetworkCapabilities(it) }
                 if (caps != null && caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) {
                     val fromTransport = (caps.transportInfo as? WifiInfo)
-                        ?.ssid
-                        ?.let { sanitizeSsid(it) }
+                        ?.compatible24GhzSsid()
                     if (!fromTransport.isNullOrBlank()) return fromTransport
                 }
             }
 
             @Suppress("DEPRECATION")
             val fromWifiInfo = wifiManager?.connectionInfo
-                ?.ssid
-                ?.let { sanitizeSsid(it) }
+                ?.compatible24GhzSsid()
             if (!fromWifiInfo.isNullOrBlank()) return fromWifiInfo
 
             null
@@ -84,10 +85,7 @@ class WifiNetworkHelper(
         }
     }
 
-    /**
-     * Dispara un escaneo WiFi y espera el broadcast de resultados.
-     * Puede devolver lista vacía si el sistema limíta el rate de scan.
-     */
+    /** Dispara un escaneo WiFi con timeout y fallback controlado a la caché. */
     @SuppressLint("MissingPermission")
     suspend fun scanNearbyNetworks(): Result<List<WifiNetwork>> {
         val manager = wifiManager
@@ -101,118 +99,211 @@ class WifiNetworkHelper(
             return Result.failure(error)
         }
 
-        return suspendCancellableCoroutine { continuation ->
-            val receiver = object : BroadcastReceiver() {
-                override fun onReceive(ctx: Context?, intent: Intent?) {
-                    if (intent?.action != WifiManager.SCAN_RESULTS_AVAILABLE_ACTION) return
-                    try {
-                        appContext.unregisterReceiver(this)
-                    } catch (_: IllegalArgumentException) {
-                        // ya desregistrado
-                    }
-                    if (!continuation.isActive) return
-
-                    val success = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                        intent.getBooleanExtra(WifiManager.EXTRA_RESULTS_UPDATED, true)
-                    } else {
-                        true
-                    }
-
-                    val networks = safeScanResults(manager)
-
-                    if (!success && networks.isEmpty()) {
-                        continuation.resume(
-                            Result.failure(
-                                IllegalStateException(
-                                    "No pudimos actualizar la lista de redes. Intentá de nuevo.",
-                                ),
-                            ),
-                        )
-                    } else {
-                        continuation.resume(Result.success(networks))
-                    }
-                }
+        val result = withTimeoutOrNull(SCAN_TIMEOUT_MS) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                awaitScanWithCallback(manager)
+            } else {
+                awaitScanWithBroadcast(manager)
             }
+        }
+        return result ?: Result.failure(
+            WifiScanTimeoutException(
+                "La búsqueda tardó demasiado. Esperá unos segundos e intentá de nuevo.",
+            ),
+        )
+    }
 
-            try {
-                val filter = IntentFilter(WifiManager.SCAN_RESULTS_AVAILABLE_ACTION)
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    appContext.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
-                } else {
-                    @Suppress("UnspecifiedRegisterReceiverFlag")
-                    appContext.registerReceiver(receiver, filter)
-                }
-            } catch (error: Exception) {
-                if (continuation.isActive) {
-                    continuation.resume(Result.failure(error))
-                }
-                return@suspendCancellableCoroutine
+    @RequiresApi(Build.VERSION_CODES.R)
+    @SuppressLint("MissingPermission")
+    private suspend fun awaitScanWithCallback(
+        manager: WifiManager,
+    ): Result<List<WifiNetwork>> = suspendCancellableCoroutine { continuation ->
+        val callback = object : WifiManager.ScanResultsCallback() {
+            override fun onScanResultsAvailable() {
+                unregisterScanCallback(manager, this)
+                if (!continuation.isActive) return
+                continuation.resume(readScanResultsResult(manager))
             }
+        }
 
-            continuation.invokeOnCancellation {
-                try {
-                    appContext.unregisterReceiver(receiver)
-                } catch (_: IllegalArgumentException) {
-                    // ignore
-                }
-            }
+        try {
+            manager.registerScanResultsCallback(appContext.mainExecutor, callback)
+        } catch (error: Exception) {
+            continuation.resume(Result.failure(error))
+            return@suspendCancellableCoroutine
+        }
 
-            try {
-                @Suppress("DEPRECATION")
-                val started = manager.startScan()
-                if (!started) {
-                    try {
-                        appContext.unregisterReceiver(receiver)
-                    } catch (_: IllegalArgumentException) {
-                        // ignore
-                    }
-                    if (!continuation.isActive) return@suspendCancellableCoroutine
-                    continuation.resume(Result.success(safeScanResults(manager)))
-                }
-            } catch (error: SecurityException) {
-                try {
-                    appContext.unregisterReceiver(receiver)
-                } catch (_: IllegalArgumentException) {
-                    // ignore
-                }
-                if (continuation.isActive) {
-                    continuation.resume(Result.failure(error))
-                }
-            } catch (error: Exception) {
-                try {
-                    appContext.unregisterReceiver(receiver)
-                } catch (_: IllegalArgumentException) {
-                    // ignore
-                }
-                if (continuation.isActive) {
-                    continuation.resume(Result.failure(error))
-                }
+        continuation.invokeOnCancellation {
+            unregisterScanCallback(manager, callback)
+        }
+
+        if (!continuation.isActive) return@suspendCancellableCoroutine
+        requestActiveScan(
+            manager = manager,
+            unregister = { unregisterScanCallback(manager, callback) },
+            resume = { result ->
+                if (continuation.isActive) continuation.resume(result)
+            },
+        )
+    }
+
+    @SuppressLint("MissingPermission")
+    private suspend fun awaitScanWithBroadcast(
+        manager: WifiManager,
+    ): Result<List<WifiNetwork>> = suspendCancellableCoroutine { continuation ->
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(ctx: Context?, intent: Intent?) {
+                if (intent?.action != WifiManager.SCAN_RESULTS_AVAILABLE_ACTION) return
+                unregisterScanReceiver(this)
+                if (!continuation.isActive) return
+
+                val success = intent.getBooleanExtra(
+                    WifiManager.EXTRA_RESULTS_UPDATED,
+                    false,
+                )
+                continuation.resume(scanCompletionResult(manager, success))
             }
+        }
+
+        try {
+            val filter = IntentFilter(WifiManager.SCAN_RESULTS_AVAILABLE_ACTION)
+            appContext.registerReceiver(receiver, filter)
+        } catch (error: Exception) {
+            continuation.resume(Result.failure(error))
+            return@suspendCancellableCoroutine
+        }
+
+        continuation.invokeOnCancellation {
+            unregisterScanReceiver(receiver)
+        }
+
+        if (!continuation.isActive) return@suspendCancellableCoroutine
+        requestActiveScan(
+            manager = manager,
+            unregister = { unregisterScanReceiver(receiver) },
+            resume = { result ->
+                if (continuation.isActive) continuation.resume(result)
+            },
+        )
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun requestActiveScan(
+        manager: WifiManager,
+        unregister: () -> Unit,
+        resume: (Result<List<WifiNetwork>>) -> Unit,
+    ) {
+        try {
+            @Suppress("DEPRECATION")
+            val started = manager.startScan()
+            if (!started) {
+                Log.w(TAG, "startScan rejected; using cached scan results")
+                unregister()
+                val cached = readScanResultsResult(manager)
+                resume(
+                    cached.fold(
+                        onSuccess = { networks ->
+                            if (networks.isNotEmpty()) {
+                                Result.success(networks)
+                            } else {
+                                Result.failure(
+                                    WifiScanTemporarilyUnavailableException(
+                                        "Android no pudo iniciar una búsqueda nueva; puede haber " +
+                                            "un límite temporal. Esperá unos segundos antes de reintentar.",
+                                    ),
+                                )
+                            }
+                        },
+                        onFailure = { Result.failure(it) },
+                    ),
+                )
+            }
+        } catch (error: Exception) {
+            unregister()
+            resume(Result.failure(error))
         }
     }
 
-    private fun safeScanResults(manager: WifiManager): List<WifiNetwork> = try {
-        manager.scanResults
-            .orEmpty()
-            .mapNotNull { it.toWifiNetwork() }
-            .distinctBy { it.ssid.lowercase() }
-            .sortedByDescending { it.rssi }
-    } catch (error: SecurityException) {
-        Log.w(TAG, "scanResults blocked by SecurityException", error)
-        emptyList()
-    } catch (error: Exception) {
-        Log.w(TAG, "scanResults failed", error)
-        emptyList()
+    private fun scanCompletionResult(
+        manager: WifiManager,
+        resultsUpdated: Boolean,
+    ): Result<List<WifiNetwork>> {
+        val result = readScanResultsResult(manager)
+        return result.fold(
+            onSuccess = { networks ->
+                if (!resultsUpdated && networks.isEmpty()) {
+                    Result.failure(
+                        IllegalStateException(
+                            "Android no pudo actualizar la lista de redes. Intentá de nuevo.",
+                        ),
+                    )
+                } else {
+                    Result.success(networks)
+                }
+            },
+            onFailure = { Result.failure(it) },
+        )
     }
 
+    private fun readScanResultsResult(manager: WifiManager): Result<List<WifiNetwork>> {
+        return try {
+            Result.success(
+                manager.scanResults
+                    .orEmpty()
+                    .mapNotNull { it.toWifiNetwork() }
+                    .distinctBy { it.ssid.lowercase() }
+                    .sortedByDescending { it.rssi },
+            )
+        } catch (error: SecurityException) {
+            Log.w(TAG, "WiFi scan results blocked by permissions", error)
+            Result.failure(error)
+        } catch (error: Exception) {
+            Log.w(TAG, "Unable to read WiFi scan results", error)
+            Result.failure(error)
+        }
+    }
+
+    private fun unregisterScanReceiver(receiver: BroadcastReceiver) {
+        try {
+            appContext.unregisterReceiver(receiver)
+        } catch (_: IllegalArgumentException) {
+            // Ya estaba desregistrado.
+        }
+    }
+
+    @RequiresApi(Build.VERSION_CODES.R)
+    private fun unregisterScanCallback(
+        manager: WifiManager,
+        callback: WifiManager.ScanResultsCallback,
+    ) {
+        try {
+            manager.unregisterScanResultsCallback(callback)
+        } catch (_: IllegalArgumentException) {
+            // Ya estaba desregistrado.
+        }
+    }
+
+    @Suppress("DEPRECATION")
     private fun ScanResult.toWifiNetwork(): WifiNetwork? {
-        val name = sanitizeSsid(SSID) ?: return null
+        if (frequency !in MIN_24_GHZ_FREQUENCY..MAX_24_GHZ_FREQUENCY) return null
+        val rawSsid = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            wifiSsid?.toString()
+        } else {
+            SSID
+        }
+        val name = sanitizeSsid(rawSsid) ?: return null
         if (name.isBlank()) return null
         return WifiNetwork(
             ssid = name,
             rssi = level,
             isSecured = capabilitiesIndicateSecured(capabilities),
         )
+    }
+
+    @Suppress("DEPRECATION")
+    private fun WifiInfo.compatible24GhzSsid(): String? {
+        if (frequency !in MIN_24_GHZ_FREQUENCY..MAX_24_GHZ_FREQUENCY) return null
+        return sanitizeSsid(ssid)
     }
 
     private fun capabilitiesIndicateSecured(capabilities: String?): Boolean {
@@ -239,5 +330,12 @@ class WifiNetworkHelper(
     private companion object {
         private const val TAG = "WifiNetworkHelper"
         private const val UNKNOWN_SSID = "<unknown ssid>"
+        private const val SCAN_TIMEOUT_MS = 15_000L
+        private const val MIN_24_GHZ_FREQUENCY = 2_400
+        private const val MAX_24_GHZ_FREQUENCY = 2_500
     }
 }
+
+class WifiScanTimeoutException(message: String) : IllegalStateException(message)
+
+class WifiScanTemporarilyUnavailableException(message: String) : IllegalStateException(message)

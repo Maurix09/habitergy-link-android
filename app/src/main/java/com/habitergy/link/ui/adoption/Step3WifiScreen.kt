@@ -42,6 +42,7 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -91,6 +92,7 @@ fun Step3WifiScreen(
     onOpenNetworkSheet: () -> Unit,
     onDismissNetworkSheet: () -> Unit,
     onSelectNetwork: (String) -> Unit,
+    onRefreshCurrentSsid: () -> Unit,
     onRefreshWifiScan: () -> Unit,
     onRetryWifiScan: () -> Unit,
     onContinue: () -> Boolean,
@@ -104,6 +106,7 @@ fun Step3WifiScreen(
 
     var permissionRequestedOnce by rememberSaveable { mutableStateOf(false) }
     var openSettingsInstead by rememberSaveable { mutableStateOf(false) }
+    var openSheetAfterPermission by rememberSaveable { mutableStateOf(false) }
 
     fun refreshPermissionStrategy() {
         openSettingsInstead = activity != null &&
@@ -118,7 +121,8 @@ fun Step3WifiScreen(
         ActivityResultContracts.StartActivityForResult(),
     ) {
         if (WifiPermissions.allGranted(context)) {
-            onOpenNetworkSheet()
+            onRefreshCurrentSsid()
+            if (openSheetAfterPermission) onOpenNetworkSheet()
         } else {
             refreshPermissionStrategy()
             scope.launch {
@@ -143,8 +147,9 @@ fun Step3WifiScreen(
             )
         openSettingsInstead = needsSettings
         if (granted) {
-            onOpenNetworkSheet()
-        } else if (needsSettings) {
+            onRefreshCurrentSsid()
+            if (openSheetAfterPermission) onOpenNetworkSheet()
+        } else if (needsSettings && openSheetAfterPermission) {
             // Android ya no muestra el diálogo → ficha de la app en Ajustes.
             appSettingsLauncher.launch(RuntimePermissions.appDetailsSettingsIntent(context))
         } else {
@@ -164,14 +169,22 @@ fun Step3WifiScreen(
         ActivityResultContracts.StartActivityForResult(),
     ) { onRefreshWifiScan() }
 
-    fun requestWifiPermissionOrOpenSettings() {
+    fun requestWifiPermissionOrOpenSettings(shouldOpenSheet: Boolean = true) {
+        openSheetAfterPermission = shouldOpenSheet
         refreshPermissionStrategy()
-        if (openSettingsInstead) {
+        if (openSettingsInstead && shouldOpenSheet) {
             appSettingsLauncher.launch(RuntimePermissions.appDetailsSettingsIntent(context))
+        } else if (openSettingsInstead) {
+            scope.launch {
+                snackbarHostState.showSnackbar(
+                    "Para detectar la red actual, habilitá Ubicación precisa en Ajustes.",
+                )
+            }
         } else {
             val missing = WifiPermissions.missing(context)
             if (missing.isEmpty()) {
-                onOpenNetworkSheet()
+                onRefreshCurrentSsid()
+                if (shouldOpenSheet) onOpenNetworkSheet()
             } else {
                 permissionLauncher.launch(missing)
             }
@@ -183,18 +196,27 @@ fun Step3WifiScreen(
             onOpenNetworkSheet()
         } else {
             // Pedir permiso ANTES de abrir el sheet (diálogo del sistema).
-            requestWifiPermissionOrOpenSettings()
+            requestWifiPermissionOrOpenSettings(shouldOpenSheet = true)
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        if (WifiPermissions.allGranted(context)) {
+            onRefreshCurrentSsid()
+        } else {
+            requestWifiPermissionOrOpenSettings(shouldOpenSheet = false)
         }
     }
 
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         containerColor = androidx.compose.ui.graphics.Color.Transparent,
-    ) { _ ->
+    ) { innerPadding ->
         AdoptionScreenScaffold(
             currentStep = state.currentStep,
             totalSteps = state.totalSteps,
             onBack = onBack,
+            modifier = Modifier.padding(innerPadding),
             content = {
                 ScreenTitle(
                     title = "Conectalo a la red WiFi",
@@ -215,7 +237,7 @@ fun Step3WifiScreen(
                         if (state.wifiSsidError) {
                             Text("Ingresá el nombre de la red WiFi")
                         } else {
-                            Text("Podés editarlo si es una red oculta")
+                            Text("Podés buscar una red 2,4 GHz o escribir un SSID oculto")
                         }
                     },
                     trailingIcon = {
@@ -312,7 +334,9 @@ fun Step3WifiScreen(
             WifiNetworkSheetContent(
                 state = state,
                 openSettingsInstead = openSettingsInstead,
-                onRequestPermission = ::requestWifiPermissionOrOpenSettings,
+                onRequestPermission = {
+                    requestWifiPermissionOrOpenSettings(shouldOpenSheet = true)
+                },
                 onOpenLocationSettings = {
                     locationSettingsLauncher.launch(
                         Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS),
@@ -352,7 +376,8 @@ private fun WifiNetworkSheetContent(
             textAlign = TextAlign.Center,
         )
         Text(
-            text = "Al elegir una red solo completamos el nombre. " +
+            text = "Mostramos únicamente redes compatibles de 2,4 GHz. " +
+                "Al elegir una red solo completamos el nombre. " +
                 "La contraseña la ingresás vos.",
             style = MaterialTheme.typography.bodyMedium,
             color = HabitergyColors.TextSecondary,
@@ -367,9 +392,10 @@ private fun WifiNetworkSheetContent(
                 icon = Icons.Default.Wifi,
                 message = if (openSettingsInstead) {
                     "El permiso está bloqueado. Abrí los ajustes de la app y " +
-                        "habilitá el acceso a dispositivos cercanos / ubicación."
+                        "habilitá Ubicación precisa y Dispositivos cercanos."
                 } else {
-                    "Necesitamos permiso para ver las redes WiFi cercanas."
+                    "Necesitamos Ubicación precisa para listar redes WiFi. " +
+                        "En Android 13+ también se solicita Dispositivos cercanos."
                 },
                 actionLabel = if (openSettingsInstead) "Abrir ajustes" else "Otorgar permisos",
                 onAction = onRequestPermission,
@@ -413,7 +439,7 @@ private fun WifiNetworkSheetContent(
 
             WifiScanPhase.Empty -> WifiSheetStatus(
                 icon = Icons.Default.Search,
-                message = "No encontramos redes WiFi cercanas. Acercate al router o " +
+                message = "No encontramos redes WiFi de 2,4 GHz. Acercate al router o " +
                     "escribí el SSID a mano.",
                 actionLabel = "Buscar de nuevo",
                 onAction = onRetry,
@@ -423,8 +449,13 @@ private fun WifiNetworkSheetContent(
                 icon = Icons.Default.WifiOff,
                 message = state.wifiScanErrorMessage
                     ?: "No pudimos buscar redes WiFi. Intentá de nuevo.",
-                actionLabel = "Buscar de nuevo",
+                actionLabel = if (state.wifiRetryEnabled) {
+                    "Buscar de nuevo"
+                } else {
+                    "Esperá unos segundos"
+                },
                 onAction = onRetry,
+                actionEnabled = state.wifiRetryEnabled,
                 tint = HabitergyColors.Error,
             )
 
@@ -495,6 +526,7 @@ private fun WifiSheetStatus(
     message: String,
     actionLabel: String,
     onAction: () -> Unit,
+    actionEnabled: Boolean = true,
     tint: androidx.compose.ui.graphics.Color = HabitergyColors.Secondary,
 ) {
     Column(
@@ -519,6 +551,7 @@ private fun WifiSheetStatus(
         HabitergyPrimaryButton(
             label = actionLabel,
             showArrow = false,
+            enabled = actionEnabled,
             onClick = onAction,
         )
     }

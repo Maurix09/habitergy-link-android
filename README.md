@@ -64,8 +64,10 @@ pnpm --filter @habitergy/database seed
 
 ### Paso 3 — WiFi (real, UI)
 
-- SSID prellenado con la red actual del teléfono; editable (redes ocultas)
-- Ícono para buscar otras señales → bottom sheet; al elegir solo completa el SSID
+- Solicita ubicación precisa (y `NEARBY_WIFI_DEVICES` en Android 13+) al entrar
+- SSID prellenado con la red 2,4 GHz actual del teléfono; editable (redes ocultas)
+- Ícono para buscar otras señales 2,4 GHz → bottom sheet; al elegir solo completa el SSID
+- Escaneo con timeout, fallback de caché y cooldown ante throttling de Android
 - Contraseña opcional (red abierta) con show/hide
 - **Continuar** guarda credenciales en estado; aprovisionamiento BLE = paso 4 (próximamente)
 

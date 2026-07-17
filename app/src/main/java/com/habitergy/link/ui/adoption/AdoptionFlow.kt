@@ -37,6 +37,7 @@ fun AdoptionFlow(
             onOpenNetworkSheet = viewModel::openWifiNetworkSheet,
             onDismissNetworkSheet = viewModel::dismissWifiNetworkSheet,
             onSelectNetwork = viewModel::selectWifiNetwork,
+            onRefreshCurrentSsid = viewModel::refreshCurrentWifiSsid,
             onRefreshWifiScan = viewModel::refreshWifiScanReadiness,
             onRetryWifiScan = viewModel::retryWifiScan,
             onContinue = viewModel::proceedFromStep3,

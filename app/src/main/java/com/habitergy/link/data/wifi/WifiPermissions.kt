@@ -9,16 +9,19 @@ import com.habitergy.link.data.RuntimePermissions
 /**
  * Permisos de runtime para leer la red actual y escanear SSIDs cercanos.
  *
- * - Android 13+ (API 33): `NEARBY_WIFI_DEVICES` (con `neverForLocation` en el manifiesto).
- * - Android 12 y anteriores: `ACCESS_FINE_LOCATION` + ubicación del sistema activa.
+ * `WifiManager.startScan()` y `getScanResults()` siguen requiriendo ubicación
+ * precisa en Android 13+. En Android 12+ FINE y COARSE deben solicitarse juntas.
+ * `NEARBY_WIFI_DEVICES` se agrega en API 33+ para las APIs WiFi modernas usadas
+ * durante el aprovisionamiento.
  */
 object WifiPermissions {
-    val required: Array<String> =
+    val required: Array<String> = buildList {
+        add(Manifest.permission.ACCESS_COARSE_LOCATION)
+        add(Manifest.permission.ACCESS_FINE_LOCATION)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            arrayOf(Manifest.permission.NEARBY_WIFI_DEVICES)
-        } else {
-            arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
+            add(Manifest.permission.NEARBY_WIFI_DEVICES)
         }
+    }.toTypedArray()
 
     fun allGranted(context: Context): Boolean =
         RuntimePermissions.allGranted(context, required)
@@ -26,9 +29,8 @@ object WifiPermissions {
     fun missing(context: Context): Array<String> =
         RuntimePermissions.missing(context, required)
 
-    /** En API ≤32 el stack WiFi no entrega SSIDs si la ubicación del sistema está apagada. */
-    fun isLocationRequiredForScan(): Boolean =
-        Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU
+    /** El escaneo activo de puntos de acceso requiere Location Services en este rango de SDK. */
+    fun isLocationRequiredForScan(): Boolean = true
 
     fun isLocationEnabled(context: Context): Boolean {
         val manager = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager

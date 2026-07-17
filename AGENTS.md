@@ -12,7 +12,7 @@ Este archivo provee contexto esencial para cualquier agente de IA (LLM) que deba
 | **Propósito** | Wizard nativo de adopción de controladores **Shelly 1PM Gen3/Gen4** (BLE, WiFi, provisioning) |
 | **Stack** | Kotlin + Jetpack Compose + Material 3 |
 | **Build** | Gradle ( **no** forma parte de pnpm/Turbo del monorepo ) |
-| **Versión actual** | `0.1.15` — pasos **1–3** (lookup API, escaneo BLE + match MAC, formulario WiFi + scan SSIDs) |
+| **Versión actual** | `0.1.16` — pasos **1–3** (lookup API, escaneo BLE + match MAC, formulario WiFi + scan SSIDs) |
 | **Play Store (planeado)** | Habitergy Link |
 
 Link reemplaza el wizard web de adopción en Android: acceso nativo a BLE, WiFi y provisioning sin limitaciones de Web Bluetooth ni mixed content.
@@ -207,13 +207,13 @@ Formulario M3: SSID + contraseña. Sin envío BLE aún (eso es paso 4).
 | Elemento | Comportamiento |
 |----------|----------------|
 | **SSID** | Prellenado con la red actual del teléfono (`WifiNetworkHelper.getCurrentSsid`). Editable (redes ocultas). |
-| **Ícono WiFi Find** | Abre `ModalBottomSheet` con escaneo de SSIDs. Al elegir una red **solo completa el SSID**. |
+| **Ícono WiFi Find** | Abre `ModalBottomSheet` con escaneo de SSIDs **2,4 GHz**. Al elegir una red **solo completa el SSID**. |
 | **Contraseña** | Opcional (red abierta). Toggle show/hide. Supporting text «Sin contraseña» si vacío. |
 | **Continuar** | Habilitado si SSID no vacío. Credenciales en estado; snackbar «próximamente» (paso 4 pendiente). |
 
-Escaneo WiFi (`WifiScanPhase`): `PermissionRequired` → `LocationOff` (≤12) → `WifiOff` → `Scanning` → `Results` / `Empty` / `Error`.
+Escaneo WiFi (`WifiScanPhase`): `PermissionRequired` → `LocationOff` → `WifiOff` → `Scanning` → `Results` / `Empty` / `Error`. Usa callback nativo en API 30+, broadcast en API 26–29, timeout de 15 s y cooldown ante throttling.
 
-Permisos (`WifiPermissions`): Android 13+ `NEARBY_WIFI_DEVICES`; ≤12 `ACCESS_FINE_LOCATION` + ubicación ON.
+Permisos (`WifiPermissions`): `ACCESS_COARSE_LOCATION` + `ACCESS_FINE_LOCATION` en todas las versiones soportadas; Android 13+ agrega `NEARBY_WIFI_DEVICES`. La ubicación del sistema debe estar activa. `startScan()` / `getScanResults()` siguen exigiendo ubicación precisa en Android 13+.
 
 Back → `goBackToStep2()` (conserva match BLE).
 
@@ -277,14 +277,14 @@ Propiedades derivadas en `AdoptionUiState`:
 - `BLUETOOTH`, `BLUETOOTH_ADMIN` (maxSdk 30) — BLE legacy (Android ≤11)
 - `BLUETOOTH_SCAN` — escaneo BLE paso 2 (**en uso**, Android 12+), con `android:usesPermissionFlags="neverForLocation"`
 - `BLUETOOTH_CONNECT` — diálogo de encendido BT en paso 2 (**en uso**, Android 12+); también se reutilizará para GATT (paso 4)
-- `ACCESS_FINE_LOCATION` (maxSdk 32) — BLE scan ≤11 + WiFi scan/SSID ≤12 (**en uso**)
-- `ACCESS_WIFI_STATE`, `CHANGE_WIFI_STATE` — red actual + escaneo SSIDs paso 3 (**en uso**)
+- `ACCESS_COARSE_LOCATION` + `ACCESS_FINE_LOCATION` — se solicitan juntas; ubicación precisa requerida por `startScan()` / `getScanResults()` (**en uso**)
+- `ACCESS_NETWORK_STATE`, `ACCESS_WIFI_STATE`, `CHANGE_WIFI_STATE` — red actual + escaneo SSIDs paso 3 (**en uso**)
 - `NEARBY_WIFI_DEVICES` — escaneo WiFi Android 13+ (**en uso**, `neverForLocation`)
 - `CAMERA` (QR, futuro)
 - `INTERNET` — lookup HTTP contra `apps/api` (**en uso**)
 
 Runtime BLE (`BlePermissions.required`): `BLUETOOTH_SCAN` + `BLUETOOTH_CONNECT` en API 31+; `ACCESS_FINE_LOCATION` en ≤11.
-Runtime WiFi (`WifiPermissions.required`): `NEARBY_WIFI_DEVICES` en API 33+; `ACCESS_FINE_LOCATION` en ≤32.
+Runtime WiFi (`WifiPermissions.required`): `ACCESS_COARSE_LOCATION` + `ACCESS_FINE_LOCATION`; en API 33+ agrega `NEARBY_WIFI_DEVICES`.
 
 `uses-feature`: `bluetooth_le` required; `camera` optional.
 `networkSecurityConfig`: solo HTTPS (sin cleartext).
