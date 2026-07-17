@@ -88,17 +88,37 @@ class AdoptionViewModel(
     fun proceedToStep3() {
         if (!_uiState.value.canProceedFromStep2) return
         cancelScan()
-        val currentSsid = wifiHelper.getCurrentSsid().orEmpty()
+        // Navegar primero: leer el SSID nunca debe bloquear ni tumbar el paso 3.
         _uiState.update {
             it.copy(
                 currentStep = 3,
-                wifiSsid = currentSsid.ifBlank { it.wifiSsid },
                 wifiSsidTouched = false,
                 showWifiNetworkSheet = false,
                 wifiScanPhase = WifiScanPhase.Idle,
                 nearbyWifiNetworks = emptyList(),
                 wifiScanErrorMessage = null,
             )
+        }
+        prefillCurrentWifiSsid()
+    }
+
+    /**
+     * Intenta completar el SSID con la red actual del teléfono.
+     * Fallos de permiso / SecurityException se ignoran (campo queda vacío).
+     */
+    private fun prefillCurrentWifiSsid() {
+        viewModelScope.launch {
+            val ssid = runCatching { wifiHelper.getCurrentSsid() }
+                .getOrNull()
+                ?.takeIf { it.isNotBlank() }
+                ?: return@launch
+            _uiState.update { state ->
+                if (state.currentStep != 3) return@update state
+                // No pisar si el usuario ya empezó a escribir.
+                if (state.wifiSsid.isNotBlank() && state.wifiSsidTouched) return@update state
+                if (state.wifiSsid.isNotBlank()) return@update state
+                state.copy(wifiSsid = ssid)
+            }
         }
     }
 
@@ -208,16 +228,24 @@ class AdoptionViewModel(
                     }
                 },
                 onFailure = { error ->
-                    if (error.message == "WIFI_OFF") {
-                        _uiState.update { it.copy(wifiScanPhase = WifiScanPhase.WifiOff) }
-                    } else {
-                        _uiState.update {
-                            it.copy(
-                                wifiScanPhase = WifiScanPhase.Error,
-                                wifiScanErrorMessage = error.message
-                                    ?: "No pudimos buscar redes WiFi. Intentá de nuevo.",
-                            )
-                        }
+                    when {
+                        error.message == "WIFI_OFF" ->
+                            _uiState.update { it.copy(wifiScanPhase = WifiScanPhase.WifiOff) }
+                        error is SecurityException ->
+                            _uiState.update {
+                                it.copy(
+                                    wifiScanPhase = WifiScanPhase.PermissionRequired,
+                                    wifiScanErrorMessage = null,
+                                )
+                            }
+                        else ->
+                            _uiState.update {
+                                it.copy(
+                                    wifiScanPhase = WifiScanPhase.Error,
+                                    wifiScanErrorMessage = error.message
+                                        ?: "No pudimos buscar redes WiFi. Intentá de nuevo.",
+                                )
+                            }
                     }
                 },
             )

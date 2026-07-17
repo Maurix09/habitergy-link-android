@@ -26,7 +26,6 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material.icons.filled.Wifi
-import androidx.compose.material.icons.filled.WifiFind
 import androidx.compose.material.icons.filled.WifiOff
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -104,16 +103,7 @@ fun Step3WifiScreen(
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     var permissionRequestedOnce by rememberSaveable { mutableStateOf(false) }
-    var openSettingsInstead by remember {
-        mutableStateOf(
-            activity != null &&
-                RuntimePermissions.shouldOpenAppSettings(
-                    activity = activity,
-                    permissions = WifiPermissions.required,
-                    alreadyRequested = permissionRequestedOnce,
-                ),
-        )
-    }
+    var openSettingsInstead by rememberSaveable { mutableStateOf(false) }
 
     fun refreshPermissionStrategy() {
         openSettingsInstead = activity != null &&
@@ -231,7 +221,7 @@ fun Step3WifiScreen(
                     trailingIcon = {
                         IconButton(onClick = ::onSearchNetworksClick) {
                             Icon(
-                                imageVector = Icons.Default.WifiFind,
+                                imageVector = Icons.Default.Wifi,
                                 contentDescription = "Buscar otras redes",
                                 tint = HabitergyColors.Primary,
                             )
