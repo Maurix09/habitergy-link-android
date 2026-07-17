@@ -2,6 +2,7 @@ package com.habitergy.link.ui.adoption
 
 import android.bluetooth.BluetoothAdapter
 import android.content.Intent
+import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -14,6 +15,7 @@ import androidx.compose.material.icons.automirrored.filled.BluetoothSearching
 import androidx.compose.material.icons.filled.BluetoothDisabled
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ErrorOutline
+import androidx.compose.material.icons.filled.LocationOff
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.SearchOff
 import androidx.compose.material3.CircularProgressIndicator
@@ -56,6 +58,10 @@ fun Step2BleScanScreen(
     ) { onCheckReadiness() }
 
     val enableBluetoothLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult(),
+    ) { onCheckReadiness() }
+
+    val enableLocationLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult(),
     ) { onCheckReadiness() }
 
@@ -111,6 +117,23 @@ fun Step2BleScanScreen(
                             onClick = {
                                 enableBluetoothLauncher.launch(
                                     Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE),
+                                )
+                            },
+                        )
+                    },
+                )
+
+                BleScanPhase.LocationOff -> BleStatus(
+                    icon = Icons.Default.LocationOff,
+                    message = "La ubicación del teléfono está apagada. Activala para que " +
+                        "podamos detectar dispositivos Bluetooth cercanos.",
+                    action = {
+                        HabitergyPrimaryButton(
+                            label = "Activar ubicación",
+                            showArrow = false,
+                            onClick = {
+                                enableLocationLauncher.launch(
+                                    Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS),
                                 )
                             },
                         )

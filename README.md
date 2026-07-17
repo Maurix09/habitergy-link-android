@@ -57,7 +57,7 @@ pnpm --filter @habitergy/database seed
 
 ### Paso 2 — Bluetooth (real)
 
-- Verifica permisos de runtime y que el Bluetooth esté encendido (dispara el diálogo del sistema si hace falta)
+- Verifica permisos de runtime (`BLUETOOTH_SCAN` + `BLUETOOTH_CONNECT` en Android 12+; ubicación en ≤11), que el Bluetooth esté encendido y que los servicios de ubicación del sistema estén activos
 - Escanea por BLE (`BluetoothLeScanner`, filtro Allterco `0x0BA9`) y hace match por MAC con la resuelta en el paso 1
 - Sin código: muestra la lista de Shelly 1PM cercanos para elegir
 - El «Siguiente» queda deshabilitado hasta implementar el paso 3

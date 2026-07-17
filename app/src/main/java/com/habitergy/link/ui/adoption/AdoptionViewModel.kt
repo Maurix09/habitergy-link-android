@@ -186,19 +186,24 @@ class AdoptionViewModel(
 
     /**
      * Verifica las precondiciones del escaneo BLE (soporte, permisos, adaptador
-     * encendido) y, si todo está listo, arranca el escaneo. La UI la llama al
-     * entrar al paso 2 y tras conceder permisos o encender el Bluetooth.
+     * encendido, ubicación del sistema) y, si todo está listo, arranca el
+     * escaneo. La UI la llama al entrar al paso 2 y tras conceder permisos,
+     * encender el Bluetooth o activar la ubicación.
      */
     fun refreshBleReadiness() {
+        val app = getApplication<Application>()
         when {
             !bleScanner.isSupported() -> updateBlePhase(
                 BleScanPhase.Error,
                 "Este dispositivo no es compatible con Bluetooth LE.",
             )
-            !BlePermissions.allGranted(getApplication()) ->
+            !BlePermissions.allGranted(app) ->
                 updateBlePhase(BleScanPhase.PermissionRequired)
             !bleScanner.isEnabled() ->
                 updateBlePhase(BleScanPhase.BluetoothOff)
+            BlePermissions.isLocationRequiredForScan() &&
+                !BlePermissions.isLocationEnabled(app) ->
+                updateBlePhase(BleScanPhase.LocationOff)
             else -> startBleScan()
         }
     }

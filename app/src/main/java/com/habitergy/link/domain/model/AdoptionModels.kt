@@ -78,6 +78,13 @@ enum class BleScanPhase {
     /** El adaptador Bluetooth está apagado. */
     BluetoothOff,
 
+    /**
+     * Los servicios de ubicación del sistema están apagados.
+     * Sin ellos Android no entrega resultados de escaneo BLE (mientras el
+     * manifiesto no declare `neverForLocation` en `BLUETOOTH_SCAN`).
+     */
+    LocationOff,
+
     /** Escaneando controladores. */
     Scanning,
 
