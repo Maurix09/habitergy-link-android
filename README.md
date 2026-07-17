@@ -60,7 +60,7 @@ pnpm --filter @habitergy/database seed
 - Verifica permisos de runtime (`BLUETOOTH_SCAN` + `BLUETOOTH_CONNECT` en Android 12+; ubicación en ≤11) y que el Bluetooth esté encendido
 - Escanea por BLE (`BluetoothLeScanner`, sin filtros) y muestra **en vivo** todos los anuncios detectados; hace match por MAC normalizada con la del paso 1
 - Sin código: muestra la lista de dispositivos detectados para elegir
-- **Siguiente** habilitado cuando hay match (o dispositivo seleccionado) → paso 3
+- **Siguiente** (footer fijo) habilitado cuando hay match (o dispositivo seleccionado) → paso 3; volver solo con el ícono del header
 
 ### Paso 3 — WiFi (real, UI)
 
@@ -69,7 +69,7 @@ pnpm --filter @habitergy/database seed
 - Ícono para buscar otras señales 2,4 GHz → bottom sheet; al elegir solo completa el SSID
 - Escaneo con timeout, fallback de caché y cooldown ante throttling de Android
 - Contraseña opcional (red abierta) con show/hide
-- **Continuar** guarda credenciales en estado; aprovisionamiento BLE = paso 4 (próximamente)
+- **Siguiente** guarda credenciales en estado; aprovisionamiento BLE = paso 4 (próximamente)
 
 ## Estructura
 

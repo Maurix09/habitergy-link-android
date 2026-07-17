@@ -12,7 +12,7 @@ Este archivo provee contexto esencial para cualquier agente de IA (LLM) que deba
 | **Propósito** | Wizard nativo de adopción de controladores **Shelly 1PM Gen3/Gen4** (BLE, WiFi, provisioning) |
 | **Stack** | Kotlin + Jetpack Compose + Material 3 |
 | **Build** | Gradle ( **no** forma parte de pnpm/Turbo del monorepo ) |
-| **Versión actual** | `0.1.16` — pasos **1–3** (lookup API, escaneo BLE + match MAC, formulario WiFi + scan SSIDs) |
+| **Versión actual** | `0.1.17` — pasos **1–3** (lookup API, escaneo BLE + match MAC, formulario WiFi + scan SSIDs) |
 | **Play Store (planeado)** | Habitergy Link |
 
 Link reemplaza el wizard web de adopción en Android: acceso nativo a BLE, WiFi y provisioning sin limitaciones de Web Bluetooth ni mixed content.
@@ -148,7 +148,7 @@ flowchart TD
 
   S1 -->|Siguiente| S2
   S2 -->|Siguiente| S3
-  S3 -->|Continuar| S4
+  S3 -->|Siguiente| S4
 ```
 
 ### Paso 1 — Identificá el controlador (`Step1IdentifyScreen`)
@@ -198,7 +198,7 @@ Escáner en `data/ble/` (`ShellyBleScanner` sobre `BluetoothLeScanner` **sin fil
 
 Permisos (`BlePermissions`): Android 12+ pide `BLUETOOTH_SCAN` + `BLUETOOTH_CONNECT`; el manifiesto declara `neverForLocation` en `BLUETOOTH_SCAN` (no depende de ubicación). Android ≤11 pide `ACCESS_FINE_LOCATION` y exige servicios de ubicación ON (`LocationOff` si no).
 
-Navegación: back en paso 2 → `goBackToStep1()` (cancela el escaneo). «Siguiente» → `proceedToStep3()`. Al volver del paso 3 no se re-escanea (solo si `Idle`).
+Navegación: volver solo con el ícono del header (flecha). Footer fijo con **Siguiente** siempre visible (habilitado cuando hay match o selección); **Buscar de nuevo** aparece arriba según la fase. «Siguiente» → `proceedToStep3()`. Al volver del paso 3 no se re-escanea (solo si `Idle`).
 
 ### Paso 3 — Conectalo a la red WiFi (`Step3WifiScreen`)
 
@@ -209,7 +209,7 @@ Formulario M3: SSID + contraseña. Sin envío BLE aún (eso es paso 4).
 | **SSID** | Prellenado con la red actual del teléfono (`WifiNetworkHelper.getCurrentSsid`). Editable (redes ocultas). |
 | **Ícono WiFi Find** | Abre `ModalBottomSheet` con escaneo de SSIDs **2,4 GHz**. Al elegir una red **solo completa el SSID**. |
 | **Contraseña** | Opcional (red abierta). Toggle show/hide. Supporting text «Sin contraseña» si vacío. |
-| **Continuar** | Habilitado si SSID no vacío. Credenciales en estado; snackbar «próximamente» (paso 4 pendiente). |
+| **Siguiente** | Habilitado si SSID no vacío. Credenciales en estado; snackbar «próximamente» (paso 4 pendiente). |
 
 Escaneo WiFi (`WifiScanPhase`): `PermissionRequired` → `LocationOff` → `WifiOff` → `Scanning` → `Results` / `Empty` / `Error`. Usa callback nativo en API 30+, broadcast en API 26–29, timeout de 15 s y cooldown ante throttling.
 

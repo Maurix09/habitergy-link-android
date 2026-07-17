@@ -272,21 +272,11 @@ fun Step2BleScanScreen(
         footer = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 when (state.bleScanPhase) {
-                    BleScanPhase.Matched, BleScanPhase.DeviceList -> {
-                        HabitergyPrimaryButton(
-                            label = "Siguiente",
-                            enabled = state.canProceedFromStep2,
-                            onClick = onNext,
-                        )
-                        HabitergySecondaryButton(label = "Volver", onClick = onBack)
-                    }
-
                     BleScanPhase.Scanning -> {
                         HabitergySecondaryButton(
                             label = "Buscar de nuevo",
                             onClick = onRetry,
                         )
-                        HabitergySecondaryButton(label = "Volver", onClick = onBack)
                     }
 
                     BleScanPhase.NotFound, BleScanPhase.Empty, BleScanPhase.Error -> {
@@ -295,20 +285,16 @@ fun Step2BleScanScreen(
                             showArrow = false,
                             onClick = onRetry,
                         )
-                        HabitergySecondaryButton(label = "Volver", onClick = onBack)
                     }
 
-                    BleScanPhase.PermissionRequired -> {
-                        HabitergyPrimaryButton(
-                            label = if (openSettingsInstead) "Abrir ajustes" else "Otorgar permisos",
-                            showArrow = false,
-                            onClick = ::requestBlePermissionOrOpenSettings,
-                        )
-                        HabitergySecondaryButton(label = "Volver", onClick = onBack)
-                    }
-
-                    else -> HabitergySecondaryButton(label = "Volver", onClick = onBack)
+                    else -> Unit
                 }
+
+                HabitergyPrimaryButton(
+                    label = "Siguiente",
+                    enabled = state.canProceedFromStep2,
+                    onClick = onNext,
+                )
             }
         },
     )

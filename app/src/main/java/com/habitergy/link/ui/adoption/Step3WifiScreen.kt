@@ -308,7 +308,7 @@ fun Step3WifiScreen(
             },
             footer = {
                 HabitergyPrimaryButton(
-                    label = "Continuar",
+                    label = "Siguiente",
                     enabled = state.canProceedFromStep3,
                     onClick = {
                         if (onContinue()) {
