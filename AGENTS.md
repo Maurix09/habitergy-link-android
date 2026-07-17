@@ -12,7 +12,7 @@ Este archivo provee contexto esencial para cualquier agente de IA (LLM) que deba
 | **Propósito** | Wizard nativo de adopción de controladores **Shelly 1PM Gen3/Gen4** (BLE, WiFi, provisioning) |
 | **Stack** | Kotlin + Jetpack Compose + Material 3 |
 | **Build** | Gradle ( **no** forma parte de pnpm/Turbo del monorepo ) |
-| **Versión actual** | `0.1.12` — paso **1 real** (lookup API + checksum), paso **2 real** (escaneo BLE + match por MAC) |
+| **Versión actual** | `0.1.13` — pasos **1–3** (lookup API, escaneo BLE + match MAC, formulario WiFi + scan SSIDs) |
 | **Play Store (planeado)** | Habitergy Link |
 
 Link reemplaza el wizard web de adopción en Android: acceso nativo a BLE, WiFi y provisioning sin limitaciones de Web Bluetooth ni mixed content.
@@ -97,7 +97,7 @@ apps/link-android/
 └── app/
     ├── build.gradle.kts          # applicationId, minSdk 26, Ktor + serialization deps
     └── src/main/
-        ├── AndroidManifest.xml   # Permisos BLE, location, camera, INTERNET
+        ├── AndroidManifest.xml   # Permisos BLE, WiFi, location, camera, INTERNET
         ├── res/xml/network_security_config.xml  # HTTPS only (sin cleartext)
         ├── java/com/habitergy/link/
         │   ├── MainActivity.kt           # Entry: HabitergyTheme + AdoptionFlow
@@ -108,13 +108,15 @@ apps/link-android/
         │   ├── data/
         │   │   ├── api/                  # Ktor: ApiConfig, AdoptionApi, AdoptionDeviceDto
         │   │   ├── ble/                  # ShellyBleScanner, ShellyManufacturerData, ShellyModels, MacAddress, BlePermissions
+        │   │   ├── wifi/                 # WifiNetworkHelper, WifiPermissions
         │   │   └── AdoptionRepository.kt # Lookup device_code → AdoptionLookupResult
         │   └── ui/
         │       ├── adoption/
-        │       │   ├── AdoptionFlow.kt       # Switch paso 1 / 2
-        │       │   ├── AdoptionViewModel.kt  # Lógica del wizard (lookup real + escaneo BLE)
+        │       │   ├── AdoptionFlow.kt       # Switch pasos 1–3
+        │       │   ├── AdoptionViewModel.kt  # Lógica del wizard (lookup + BLE + WiFi)
         │       │   ├── Step1IdentifyScreen.kt
-        │       │   └── Step2BleScanScreen.kt  # Escaneo BLE real
+        │       │   ├── Step2BleScanScreen.kt  # Escaneo BLE real
+        │       │   └── Step3WifiScreen.kt     # Formulario WiFi + scan SSIDs
         │       ├── components/             # Scaffold, botones, tarjetas, DeviceCodeInput
         │       └── theme/                  # HabitergyColors, Theme, Typography, Shape
         └── res/                            # strings, colors, launcher, themes
@@ -128,23 +130,25 @@ apps/link-android/
 | Dominio | `domain/` | `DeviceCode` (sufijo nanoId), modelos puros sin Android |
 | Datos | `data/api/` | Ktor → `apps/api` (lookup adopción) |
 | Datos | `data/` | `AdoptionRepository` (abstracción sobre la API) |
-| Datos | `data/ble/` | `ShellyBleScanner` (escaneo paso 2), parseo Allterco, permisos; GATT Shelly (paso 3) pendiente |
+| Datos | `data/ble/` | `ShellyBleScanner` (escaneo paso 2), parseo Allterco, permisos; GATT Shelly (paso 4) pendiente |
+| Datos | `data/wifi/` | `WifiNetworkHelper` (SSID actual + scan), `WifiPermissions` |
 
 ## 6. Flujo de adopción (Link) — estado actual
 
-Wizard planificado de **6 pasos** (`AdoptionUiState.totalSteps = 6`). Solo **1 y 2** implementados.
+Wizard planificado de **6 pasos** (`AdoptionUiState.totalSteps = 6`). Pasos **1–3** implementados.
 
 ```mermaid
 flowchart TD
   S1[Paso 1: Identificá el controlador]
   S2[Paso 2: Conectá por Bluetooth]
-  S3[Paso 3: WiFi — pendiente]
+  S3[Paso 3: WiFi SSID + contraseña]
   S4[Paso 4: Configuración Shelly — pendiente]
   S5[Paso 5: Esperando conexión — pendiente]
   S6[Paso 6: Éxito + asignar alojamiento — pendiente]
 
   S1 -->|Siguiente| S2
-  S2 -->|Continuar| S3
+  S2 -->|Siguiente| S3
+  S3 -->|Continuar| S4
 ```
 
 ### Paso 1 — Identificá el controlador (`Step1IdentifyScreen`)
@@ -184,8 +188,8 @@ Colores: verde `HabitergyColors.Primary` (Available), rojo `HabitergyColors.Erro
 | `BluetoothOff` | adaptador apagado | botón «Encender Bluetooth» → `BluetoothAdapter.ACTION_REQUEST_ENABLE` |
 | `LocationOff` | (≤11) servicios de ubicación apagados | botón «Activar ubicación» → `Settings.ACTION_LOCATION_SOURCE_SETTINGS` |
 | `Scanning` | escaneando (timeout 15 s) | spinner + **lista en vivo** de todo lo detectado (match o no); resalta el que coincide |
-| `Matched` | (WithCode) MAC objetivo encontrada | banner + lista con el match marcado + «Siguiente» deshabilitado (paso 3 pendiente) |
-| `DeviceList` | (NoCode) hay Shelly cercanos | lista `ShellyDeviceCard` seleccionable |
+| `Matched` | (WithCode) MAC objetivo encontrada | banner + lista con el match marcado + «Siguiente» habilitado |
+| `DeviceList` | (NoCode) hay Shelly cercanos | lista `ShellyDeviceCard` seleccionable; «Siguiente» si hay selección |
 | `NotFound` | (WithCode) no apareció la MAC | mensaje (+ MAC buscada) + lista del último escaneo + «Buscar de nuevo» |
 | `Empty` | (NoCode) ningún Shelly cerca | mensaje + «Buscar de nuevo» |
 | `Error` | BLE no soportado / fallo del escáner | `bleErrorMessage` + «Buscar de nuevo» |
@@ -194,11 +198,28 @@ Escáner en `data/ble/` (`ShellyBleScanner` sobre `BluetoothLeScanner` **sin fil
 
 Permisos (`BlePermissions`): Android 12+ pide `BLUETOOTH_SCAN` + `BLUETOOTH_CONNECT`; el manifiesto declara `neverForLocation` en `BLUETOOTH_SCAN` (no depende de ubicación). Android ≤11 pide `ACCESS_FINE_LOCATION` y exige servicios de ubicación ON (`LocationOff` si no).
 
-Navegación: `AdoptionFlow` hace `when (state.currentStep)`; back en paso 2 → `goBackToStep1()` (cancela el escaneo).
+Navegación: back en paso 2 → `goBackToStep1()` (cancela el escaneo). «Siguiente» → `proceedToStep3()`. Al volver del paso 3 no se re-escanea (solo si `Idle`).
+
+### Paso 3 — Conectalo a la red WiFi (`Step3WifiScreen`)
+
+Formulario M3: SSID + contraseña. Sin envío BLE aún (eso es paso 4).
+
+| Elemento | Comportamiento |
+|----------|----------------|
+| **SSID** | Prellenado con la red actual del teléfono (`WifiNetworkHelper.getCurrentSsid`). Editable (redes ocultas). |
+| **Ícono WiFi Find** | Abre `ModalBottomSheet` con escaneo de SSIDs. Al elegir una red **solo completa el SSID**. |
+| **Contraseña** | Opcional (red abierta). Toggle show/hide. Supporting text «Sin contraseña» si vacío. |
+| **Continuar** | Habilitado si SSID no vacío. Credenciales en estado; snackbar «próximamente» (paso 4 pendiente). |
+
+Escaneo WiFi (`WifiScanPhase`): `PermissionRequired` → `LocationOff` (≤12) → `WifiOff` → `Scanning` → `Results` / `Empty` / `Error`.
+
+Permisos (`WifiPermissions`): Android 13+ `NEARBY_WIFI_DEVICES`; ≤12 `ACCESS_FINE_LOCATION` + ubicación ON.
+
+Back → `goBackToStep2()` (conserva match BLE).
 
 ## 7. Estado y lógica (`AdoptionViewModel`)
 
-Fuente única de verdad: `StateFlow<AdoptionUiState>`. Es un `AndroidViewModel` (necesita `Context` para el escáner BLE); crea internamente `AdoptionRepository()` y `ShellyBleScanner(application)`.
+Fuente única de verdad: `StateFlow<AdoptionUiState>`. Es un `AndroidViewModel` (necesita `Context` para BLE/WiFi); crea internamente `AdoptionRepository()`, `ShellyBleScanner` y `WifiNetworkHelper`.
 
 Campos principales:
 
@@ -207,7 +228,11 @@ Campos principales:
 deviceCodeInput, identificationMode, resolvedDevice, lookupState
 
 // Paso 2
-bleScanPhase, scannedDevices, matchedDevice, selectedDeviceId, bleErrorMessage
+bleScanPhase, discoveredBleDevices, scannedDevices, matchedDevice, selectedDeviceId, bleErrorMessage
+
+// Paso 3
+wifiSsid, wifiPassword, wifiPasswordVisible, wifiSsidTouched,
+wifiScanPhase, nearbyWifiNetworks, wifiScanErrorMessage, showWifiNetworkSheet
 
 // Navegación
 currentStep, totalSteps (= 6)
@@ -217,10 +242,14 @@ Propiedades derivadas en `AdoptionUiState`:
 
 - `isLookingUp` — `lookupState == Looking`
 - `canProceedFromStep1` — `lookupState == Available`
+- `canProceedFromStep2` — `Matched` con device, o `DeviceList` con selección
+- `canProceedFromStep3` — SSID no vacío
 - `targetMacAddress` — MAC del `resolvedDevice` (null si NoCode)
 - `selectedDevice` — `matchedDevice` o el elegido en lista
 
-**Escaneo BLE (paso 2):** `refreshBleReadiness()` (chequeos de soporte / permisos / BT / ubicación + arranque), `startBleScan()` (colecta el `Flow` de `ShellyBleScanner` con timeout, resuelve `Matched`/`NotFound`/`DeviceList`/`Empty`), `retryBleScan()`, `selectDevice(id)`. El `scanJob` se cancela al volver o en `onCleared()`.
+**Escaneo BLE (paso 2):** `refreshBleReadiness()`, `startBleScan()`, `retryBleScan()`, `selectDevice(id)`.
+
+**WiFi (paso 3):** `proceedToStep3()` (prellena SSID), `onWifiSsidChange` / `onWifiPasswordChange`, `openWifiNetworkSheet` / `selectWifiNetwork`, `refreshWifiScanReadiness()` / `retryWifiScan()`.
 
 ## 8. Datos mock
 
@@ -230,28 +259,32 @@ Propiedades derivadas en `AdoptionUiState`:
 
 | Funcionalidad | Estado |
 |---------------|--------|
-| UI pasos 1–2 | **Real** (Compose) |
+| UI pasos 1–3 | **Real** (Compose) |
 | Tema M3 Habitergy | **Real** |
 | Validación checksum device_code | **Real** (`domain/DeviceCode.kt`, réplica de `nanoId.ts`) |
 | Lookup deviceCode → MAC/model/status | **Real** (`AdoptionRepository` → `GET /api/adoption/devices/:deviceCode`) |
 | Cliente HTTP (Ktor) | **Real** |
 | Escaneo QR | **Placeholder** (botón + snackbar «Coming soon») |
 | Escaneo BLE + match por MAC | **Real** (`data/ble/ShellyBleScanner`, filtro Allterco, permisos + BT check) |
+| Formulario WiFi + scan SSIDs | **Real** (`data/wifi/`, `Step3WifiScreen`) |
 | Auth JWT / login | **No implementado** |
 | GATT / RPC-over-BLE Shelly | **No implementado** |
-| WiFi provisioning (paso 3+) | **No implementado** |
+| Envío WiFi al Shelly (paso 4+) | **No implementado** (credenciales quedan en estado) |
 | Deep link desde Manager | **No implementado** |
 
 ## 10. Permisos (`AndroidManifest.xml`)
 
 - `BLUETOOTH`, `BLUETOOTH_ADMIN` (maxSdk 30) — BLE legacy (Android ≤11)
 - `BLUETOOTH_SCAN` — escaneo BLE paso 2 (**en uso**, Android 12+), con `android:usesPermissionFlags="neverForLocation"`
-- `BLUETOOTH_CONNECT` — diálogo de encendido BT en paso 2 (**en uso**, Android 12+); también se reutilizará para GATT (paso 3)
-- `ACCESS_FINE_LOCATION` (maxSdk 30) — BLE scan en Android ≤11 (**en uso**)
+- `BLUETOOTH_CONNECT` — diálogo de encendido BT en paso 2 (**en uso**, Android 12+); también se reutilizará para GATT (paso 4)
+- `ACCESS_FINE_LOCATION` (maxSdk 32) — BLE scan ≤11 + WiFi scan/SSID ≤12 (**en uso**)
+- `ACCESS_WIFI_STATE`, `CHANGE_WIFI_STATE` — red actual + escaneo SSIDs paso 3 (**en uso**)
+- `NEARBY_WIFI_DEVICES` — escaneo WiFi Android 13+ (**en uso**, `neverForLocation`)
 - `CAMERA` (QR, futuro)
 - `INTERNET` — lookup HTTP contra `apps/api` (**en uso**)
 
-Runtime (`BlePermissions.required`): `BLUETOOTH_SCAN` + `BLUETOOTH_CONNECT` en API 31+; `ACCESS_FINE_LOCATION` en ≤11. Precondición extra solo en ≤11: `BlePermissions.isLocationEnabled()` → fase `LocationOff` si falla.
+Runtime BLE (`BlePermissions.required`): `BLUETOOTH_SCAN` + `BLUETOOTH_CONNECT` en API 31+; `ACCESS_FINE_LOCATION` en ≤11.
+Runtime WiFi (`WifiPermissions.required`): `NEARBY_WIFI_DEVICES` en API 33+; `ACCESS_FINE_LOCATION` en ≤32.
 
 `uses-feature`: `bluetooth_le` required; `camera` optional.
 `networkSecurityConfig`: solo HTTPS (sin cleartext).
@@ -300,8 +333,9 @@ Cliente HTTP: **Ktor Client** en `data/api/` (`AdoptionApi`), base URL en `ApiCo
 - [x] API lookup: `GET /api/adoption/devices/:deviceCode` (paso 1)
 - [x] Validación checksum unificada nanoId (`siteCode` + `deviceCode` SH-XXXXC)
 - [ ] Login partner (JWT) al abrir Link o vía token en deep link
-- [ ] Paso 3: WiFi SSID + contraseña → RPC-over-BLE al Shelly
-- [ ] Pasos 4–6: MQTT config, espera online, asignar alojamiento
+- [x] Paso 3: formulario WiFi SSID + contraseña + scan SSIDs
+- [ ] Paso 4: RPC-over-BLE (WiFi + MQTT) al Shelly
+- [ ] Pasos 5–6: espera online, asignar alojamiento
 - [ ] App Link: `https://app.habitergy.com/adoptar-controlador` → abre Link
 - [ ] Manager Android: botón «Adoptar» abre Link en lugar del wizard web
 

@@ -11,10 +11,18 @@
         android:usesPermissionFlags="neverForLocation"
         tools:targetApi="s" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
-    <!-- Solo necesario para BLE scan en Android ≤11. -->
+    <!-- BLE scan en Android ≤11; WiFi scan / SSID actual en Android ≤12. -->
     <uses-permission
         android:name="android.permission.ACCESS_FINE_LOCATION"
-        android:maxSdkVersion="30" />
+        android:maxSdkVersion="32" />
+
+    <!-- WiFi (paso 3: red actual + escaneo de SSIDs) -->
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
+    <uses-permission
+        android:name="android.permission.NEARBY_WIFI_DEVICES"
+        android:usesPermissionFlags="neverForLocation"
+        tools:targetApi="tiramisu" />
 
     <!-- QR (paso 1 real en futuras iteraciones) -->
     <uses-permission android:name="android.permission.CAMERA" />

@@ -11,6 +11,8 @@ import com.habitergy.link.data.ble.ShellyBleScanner
 import com.habitergy.link.data.ble.buildShellyDisplayName
 import com.habitergy.link.data.ble.formatMac
 import com.habitergy.link.data.ble.normalizeMac
+import com.habitergy.link.data.wifi.WifiNetworkHelper
+import com.habitergy.link.data.wifi.WifiPermissions
 import com.habitergy.link.domain.DeviceCode
 import com.habitergy.link.domain.model.AdoptionUiState
 import com.habitergy.link.domain.model.BleScanPhase
@@ -21,6 +23,7 @@ import com.habitergy.link.domain.model.IdentificationMode
 import com.habitergy.link.domain.model.ResolvedDevice
 import com.habitergy.link.domain.model.ScannedShellyDevice
 import com.habitergy.link.domain.model.UNKNOWN_DEVICE_CODE
+import com.habitergy.link.domain.model.WifiScanPhase
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -37,12 +40,14 @@ class AdoptionViewModel(
 
     private val repository: AdoptionRepository = AdoptionRepository()
     private val bleScanner: ShellyBleScanner = ShellyBleScanner(application)
+    private val wifiHelper: WifiNetworkHelper = WifiNetworkHelper(application)
 
     private val _uiState = MutableStateFlow(AdoptionUiState())
     val uiState: StateFlow<AdoptionUiState> = _uiState.asStateFlow()
     private var lookupJob: Job? = null
     private var activeLookupSuffix: String? = null
     private var scanJob: Job? = null
+    private var wifiScanJob: Job? = null
 
     /**
      * Mantiene una única fuente de verdad para el código ingresado. Si el cambio
@@ -77,6 +82,145 @@ class AdoptionViewModel(
     fun proceedToStep2() {
         if (_uiState.value.canProceedFromStep1) {
             navigateToStep2()
+        }
+    }
+
+    fun proceedToStep3() {
+        if (!_uiState.value.canProceedFromStep2) return
+        cancelScan()
+        val currentSsid = wifiHelper.getCurrentSsid().orEmpty()
+        _uiState.update {
+            it.copy(
+                currentStep = 3,
+                wifiSsid = currentSsid.ifBlank { it.wifiSsid },
+                wifiSsidTouched = false,
+                showWifiNetworkSheet = false,
+                wifiScanPhase = WifiScanPhase.Idle,
+                nearbyWifiNetworks = emptyList(),
+                wifiScanErrorMessage = null,
+            )
+        }
+    }
+
+    /**
+     * Guarda las credenciales WiFi en el estado. El aprovisionamiento BLE
+     * (paso 4) todavía no está implementado: la UI muestra un snackbar.
+     */
+    fun proceedFromStep3(): Boolean {
+        _uiState.update { it.copy(wifiSsidTouched = true) }
+        return _uiState.value.canProceedFromStep3
+    }
+
+    fun onWifiSsidChange(value: String) {
+        _uiState.update {
+            it.copy(
+                wifiSsid = value,
+                wifiSsidTouched = true,
+            )
+        }
+    }
+
+    fun onWifiPasswordChange(value: String) {
+        _uiState.update { it.copy(wifiPassword = value) }
+    }
+
+    fun toggleWifiPasswordVisibility() {
+        _uiState.update { it.copy(wifiPasswordVisible = !it.wifiPasswordVisible) }
+    }
+
+    fun openWifiNetworkSheet() {
+        _uiState.update {
+            it.copy(
+                showWifiNetworkSheet = true,
+                wifiScanPhase = WifiScanPhase.Idle,
+                nearbyWifiNetworks = emptyList(),
+                wifiScanErrorMessage = null,
+            )
+        }
+        refreshWifiScanReadiness()
+    }
+
+    fun dismissWifiNetworkSheet() {
+        cancelWifiScan()
+        _uiState.update {
+            it.copy(
+                showWifiNetworkSheet = false,
+                wifiScanPhase = WifiScanPhase.Idle,
+                wifiScanErrorMessage = null,
+            )
+        }
+    }
+
+    fun selectWifiNetwork(ssid: String) {
+        cancelWifiScan()
+        _uiState.update {
+            it.copy(
+                wifiSsid = ssid,
+                wifiSsidTouched = true,
+                showWifiNetworkSheet = false,
+                wifiScanPhase = WifiScanPhase.Idle,
+                wifiScanErrorMessage = null,
+            )
+        }
+    }
+
+    fun refreshWifiScanReadiness() {
+        if (!_uiState.value.showWifiNetworkSheet) return
+        val app = getApplication<Application>()
+        when {
+            !WifiPermissions.allGranted(app) ->
+                _uiState.update { it.copy(wifiScanPhase = WifiScanPhase.PermissionRequired) }
+            WifiPermissions.isLocationRequiredForScan() &&
+                !WifiPermissions.isLocationEnabled(app) ->
+                _uiState.update { it.copy(wifiScanPhase = WifiScanPhase.LocationOff) }
+            !wifiHelper.isWifiEnabled() ->
+                _uiState.update { it.copy(wifiScanPhase = WifiScanPhase.WifiOff) }
+            else -> startWifiScan()
+        }
+    }
+
+    fun retryWifiScan() {
+        refreshWifiScanReadiness()
+    }
+
+    private fun startWifiScan() {
+        cancelWifiScan()
+        _uiState.update {
+            it.copy(
+                wifiScanPhase = WifiScanPhase.Scanning,
+                nearbyWifiNetworks = emptyList(),
+                wifiScanErrorMessage = null,
+            )
+        }
+        wifiScanJob = viewModelScope.launch {
+            val result = wifiHelper.scanNearbyNetworks()
+            result.fold(
+                onSuccess = { networks ->
+                    _uiState.update {
+                        it.copy(
+                            nearbyWifiNetworks = networks,
+                            wifiScanPhase = if (networks.isEmpty()) {
+                                WifiScanPhase.Empty
+                            } else {
+                                WifiScanPhase.Results
+                            },
+                        )
+                    }
+                },
+                onFailure = { error ->
+                    if (error.message == "WIFI_OFF") {
+                        _uiState.update { it.copy(wifiScanPhase = WifiScanPhase.WifiOff) }
+                    } else {
+                        _uiState.update {
+                            it.copy(
+                                wifiScanPhase = WifiScanPhase.Error,
+                                wifiScanErrorMessage = error.message
+                                    ?: "No pudimos buscar redes WiFi. Intentá de nuevo.",
+                            )
+                        }
+                    }
+                },
+            )
         }
     }
 
@@ -153,6 +297,7 @@ class AdoptionViewModel(
     private fun navigateToStep2() {
         cancelLookup()
         cancelScan()
+        cancelWifiScan()
         _uiState.update {
             it.copy(
                 currentStep = 2,
@@ -162,6 +307,7 @@ class AdoptionViewModel(
                 matchedDevice = null,
                 selectedDeviceId = null,
                 bleErrorMessage = null,
+                showWifiNetworkSheet = false,
             )
         }
     }
@@ -169,6 +315,7 @@ class AdoptionViewModel(
     fun goBackToStep1() {
         cancelLookup()
         cancelScan()
+        cancelWifiScan()
         _uiState.update {
             it.copy(
                 currentStep = 1,
@@ -180,6 +327,20 @@ class AdoptionViewModel(
                 bleErrorMessage = null,
                 deviceCodeInput = if (it.isUnknownDeviceCode) "" else it.deviceCodeInput,
                 identificationMode = IdentificationMode.WithCode,
+                showWifiNetworkSheet = false,
+            )
+        }
+    }
+
+    fun goBackToStep2() {
+        cancelWifiScan()
+        _uiState.update {
+            it.copy(
+                currentStep = 2,
+                showWifiNetworkSheet = false,
+                wifiScanPhase = WifiScanPhase.Idle,
+                wifiScanErrorMessage = null,
+                // No reiniciar el escaneo BLE: conservamos el match/selección.
             )
         }
     }
@@ -354,8 +515,14 @@ class AdoptionViewModel(
         scanJob = null
     }
 
+    private fun cancelWifiScan() {
+        wifiScanJob?.cancel()
+        wifiScanJob = null
+    }
+
     override fun onCleared() {
         cancelScan()
+        cancelWifiScan()
         super.onCleared()
     }
 

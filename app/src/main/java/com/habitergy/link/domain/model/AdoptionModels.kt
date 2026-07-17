@@ -104,6 +104,32 @@ enum class BleScanPhase {
     Error,
 }
 
+/** Red WiFi detectada en el escaneo del paso 3. */
+data class WifiNetwork(
+    val ssid: String,
+    val rssi: Int,
+    val isSecured: Boolean,
+) {
+    val signalLabel: String
+        get() = when {
+            rssi >= -55 -> "Excelente"
+            rssi >= -70 -> "Buena"
+            else -> "Débil"
+        }
+}
+
+/** Fases del escaneo de redes WiFi (selector del paso 3). */
+enum class WifiScanPhase {
+    Idle,
+    PermissionRequired,
+    LocationOff,
+    WifiOff,
+    Scanning,
+    Results,
+    Empty,
+    Error,
+}
+
 data class AdoptionUiState(
     val currentStep: Int = 1,
     val totalSteps: Int = 6,
@@ -119,6 +145,15 @@ data class AdoptionUiState(
     val matchedDevice: ScannedShellyDevice? = null,
     val selectedDeviceId: String? = null,
     val bleErrorMessage: String? = null,
+    // Paso 3
+    val wifiSsid: String = "",
+    val wifiPassword: String = "",
+    val wifiPasswordVisible: Boolean = false,
+    val wifiSsidTouched: Boolean = false,
+    val wifiScanPhase: WifiScanPhase = WifiScanPhase.Idle,
+    val nearbyWifiNetworks: List<WifiNetwork> = emptyList(),
+    val wifiScanErrorMessage: String? = null,
+    val showWifiNetworkSheet: Boolean = false,
 ) {
     val isUnknownDeviceCode: Boolean
         get() = deviceCodeInput == UNKNOWN_DEVICE_CODE
@@ -128,6 +163,19 @@ data class AdoptionUiState(
 
     val canProceedFromStep1: Boolean
         get() = lookupState == DeviceLookupState.Available
+
+    val canProceedFromStep2: Boolean
+        get() = when (bleScanPhase) {
+            BleScanPhase.Matched -> matchedDevice != null
+            BleScanPhase.DeviceList -> selectedDeviceId != null
+            else -> false
+        }
+
+    val canProceedFromStep3: Boolean
+        get() = wifiSsid.trim().isNotEmpty()
+
+    val wifiSsidError: Boolean
+        get() = wifiSsidTouched && wifiSsid.trim().isEmpty()
 
     val targetMacAddress: String?
         get() = if (isUnknownDeviceCode) null else resolvedDevice?.macAddress

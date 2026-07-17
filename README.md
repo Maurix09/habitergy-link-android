@@ -60,7 +60,14 @@ pnpm --filter @habitergy/database seed
 - Verifica permisos de runtime (`BLUETOOTH_SCAN` + `BLUETOOTH_CONNECT` en Android 12+; ubicación en ≤11) y que el Bluetooth esté encendido
 - Escanea por BLE (`BluetoothLeScanner`, sin filtros) y muestra **en vivo** todos los anuncios detectados; hace match por MAC normalizada con la del paso 1
 - Sin código: muestra la lista de dispositivos detectados para elegir
-- El «Siguiente» queda deshabilitado hasta implementar el paso 3
+- **Siguiente** habilitado cuando hay match (o dispositivo seleccionado) → paso 3
+
+### Paso 3 — WiFi (real, UI)
+
+- SSID prellenado con la red actual del teléfono; editable (redes ocultas)
+- Ícono para buscar otras señales → bottom sheet; al elegir solo completa el SSID
+- Contraseña opcional (red abierta) con show/hide
+- **Continuar** guarda credenciales en estado; aprovisionamiento BLE = paso 4 (próximamente)
 
 ## Estructura
 
@@ -73,9 +80,10 @@ app/src/main/java/com/habitergy/link/
 ├── data/
 │   ├── api/                   # Ktor → apps/api
 │   ├── ble/                   # ShellyBleScanner + parseo Allterco + permisos
+│   ├── wifi/                  # WifiNetworkHelper + WifiPermissions
 │   └── AdoptionRepository.kt
 └── ui/
-    ├── adoption/              # ViewModel + pantallas paso 1–2
+    ├── adoption/              # ViewModel + pantallas paso 1–3
     ├── components/
     └── theme/
 ```
@@ -83,11 +91,13 @@ app/src/main/java/com/habitergy/link/
 ## Próximos pasos
 
 - [x] BLE real (`BluetoothLeScanner` + filtros Allterco + match por MAC)
-- [ ] QR con CameraX + ML Kit
 - [x] API lookup `GET /api/adoption/devices/:deviceCode`
 - [x] Checksum nanoId unificado con `siteCode`
-- [ ] Paso 3: provisioning WiFi vía RPC-over-BLE
+- [x] Paso 3: formulario WiFi + scan SSIDs
+- [ ] Paso 4: GATT / RPC-over-BLE (enviar WiFi + MQTT al Shelly)
+- [ ] QR con CameraX + ML Kit
 - [ ] Deep link desde Manager PWA
+- [ ] Pasos 5–6: espera online + asignar alojamiento
 
 ## Relación con Manager
 

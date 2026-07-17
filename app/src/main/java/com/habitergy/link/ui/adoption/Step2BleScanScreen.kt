@@ -53,6 +53,7 @@ fun Step2BleScanScreen(
     onCheckReadiness: () -> Unit,
     onRetry: () -> Unit,
     onSelectDevice: (String) -> Unit,
+    onNext: () -> Unit,
     onBack: () -> Unit,
 ) {
     val permissionLauncher = rememberLauncherForActivityResult(
@@ -67,7 +68,12 @@ fun Step2BleScanScreen(
         ActivityResultContracts.StartActivityForResult(),
     ) { onCheckReadiness() }
 
-    LaunchedEffect(Unit) { onCheckReadiness() }
+    LaunchedEffect(Unit) {
+        // Al volver del paso 3 conservamos Matched/DeviceList; no re-escanear.
+        if (state.bleScanPhase == BleScanPhase.Idle) {
+            onCheckReadiness()
+        }
+    }
 
     val showLiveDiscovery = state.bleScanPhase in setOf(
         BleScanPhase.Scanning,
@@ -209,9 +215,9 @@ fun Step2BleScanScreen(
                 when (state.bleScanPhase) {
                     BleScanPhase.Matched, BleScanPhase.DeviceList -> {
                         HabitergyPrimaryButton(
-                            label = "Siguiente (próximamente)",
-                            enabled = false,
-                            onClick = {},
+                            label = "Siguiente",
+                            enabled = state.canProceedFromStep2,
+                            onClick = onNext,
                         )
                         HabitergySecondaryButton(label = "Volver", onClick = onBack)
                     }
