@@ -6,10 +6,13 @@ import io.ktor.client.engine.android.Android
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.request.get
 import io.ktor.client.request.post
+import io.ktor.client.request.setBody
 import io.ktor.client.statement.HttpResponse
-import io.ktor.http.isSuccess
+import io.ktor.http.ContentType
+import io.ktor.http.contentType
 import io.ktor.serialization.kotlinx.json.json
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.buildJsonObject
 
 /**
  * Cliente HTTP del flujo de adopción. Llama a los endpoints públicos de apps/api.
@@ -22,8 +25,15 @@ class AdoptionApi(
         return client.get("$baseUrl${ApiConfig.ADOPTION_DEVICE_PATH}/$fullCode")
     }
 
+    /**
+     * Fastify rechaza POST con `Content-Type: application/json` y body vacío
+     * (ERROR 5 en Link). Enviamos `{}` para que el content-type y el body coincidan.
+     */
     suspend fun provisionDevice(fullCode: String): HttpResponse {
-        return client.post("$baseUrl${ApiConfig.ADOPTION_DEVICE_PATH}/$fullCode/provision")
+        return client.post("$baseUrl${ApiConfig.ADOPTION_DEVICE_PATH}/$fullCode/provision") {
+            contentType(ContentType.Application.Json)
+            setBody(buildJsonObject {})
+        }
     }
 
     suspend fun getOnlineStatus(fullCode: String): HttpResponse {
