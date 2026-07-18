@@ -12,7 +12,7 @@ Este archivo provee contexto esencial para cualquier agente de IA (LLM) que deba
 | **Propósito** | Wizard nativo de adopción de controladores **Shelly 1PM Gen3/Gen4** (BLE, WiFi, provisioning) |
 | **Stack** | Kotlin + Jetpack Compose + Material 3 |
 | **Build** | Gradle ( **no** forma parte de pnpm/Turbo del monorepo ) |
-| **Versión actual** | `0.1.20` — pasos **1–5** (lookup, BLE, WiFi, provisioner + RPC BLE, espera online) |
+| **Versión actual** | `0.1.21` — pasos **1–5** (lookup, BLE, WiFi, provisioner + RPC BLE, espera online) |
 | **Play Store (planeado)** | Habitergy Link |
 
 Link reemplaza el wizard web de adopción en Android: acceso nativo a BLE, WiFi y provisioning sin limitaciones de Web Bluetooth ni mixed content.
@@ -224,10 +224,33 @@ Back → `goBackToStep2()` (conserva match BLE).
 Al entrar arranca automáticamente el pipeline de aprovisionamiento:
 
 1. **Broker:** `POST /api/adoption/devices/:deviceCode/provision` → backend llama `POST /provisioner/devices/{shortCode}` (API key solo en servidor).
-2. **BLE GATT:** `ShellyBleRpcClient` reconecta al dispositivo del paso 2 y ejecuta RPC: `Cloud.SetConfig` (off), `Sys.SetConfig` (nombre `SH-{shortCode}`), `Wifi.SetConfig`, `Mqtt.SetConfig` (`topic_prefix`: `habitergy/v1/{shortCode}`), `Shelly.SetAuth`, `Shelly.Reboot`.
+2. **BLE GATT:** `ShellyBleRpcClient` reconecta al dispositivo del paso 2 y ejecuta RPC: `Cloud.SetConfig` (off), `Sys.SetConfig` (nombre `SH-{shortCode}`), `Wifi.SetConfig`, `Mqtt.SetConfig` (`topic_prefix`: `habitergy/v1/{shortCode}`), `Shelly.Reboot` (con `delay_ms`), `Shelly.SetAuth`.
 3. Al éxito avanza al paso 5.
 
-UI: checklist de sub-pasos + spinner. Error → **Reintentar** / volver al paso 3.
+UI: `CircularWavyProgressIndicator` + una línea de estado. Error → código **ERROR N** grande + detalle + **Reintentar** / volver al paso 3.
+
+#### Códigos de error del paso 4 (`Step4Error`)
+
+Fuente de verdad: `domain/model/Step4Error.kt`. Cada fallo del pipeline muestra `ERROR N` en UI y guarda `provisionErrorCode` + `provisionErrorMessage` (formato `ERROR N — etapa\ndetalle`).
+
+| Código | Enum | Etapa |
+|--------|------|--------|
+| **ERROR 1** | `MISSING_PREREQUISITES` | Faltan `resolvedDevice` o dispositivo BLE seleccionado |
+| **ERROR 2** | `BROKER_NETWORK` | API provision — red / timeout |
+| **ERROR 3** | `BROKER_NOT_FOUND` | API provision — 404 |
+| **ERROR 4** | `BROKER_CONFLICT` | API provision — 409 (no `available`) |
+| **ERROR 5** | `BROKER_API` | API provision — otro error HTTP |
+| **ERROR 6** | `BLE_CONNECT` | Conexión BLE GATT |
+| **ERROR 7** | `RPC_CLOUD` | RPC `Cloud.SetConfig` |
+| **ERROR 8** | `RPC_SYS` | RPC `Sys.SetConfig` |
+| **ERROR 9** | `RPC_WIFI` | RPC `Wifi.SetConfig` |
+| **ERROR 10** | `RPC_MQTT` | RPC `Mqtt.SetConfig` |
+| **ERROR 11** | `RPC_REBOOT` | RPC `Shelly.Reboot` |
+| **ERROR 12** | `RPC_GET_DEVICE_INFO` | RPC `Shelly.GetDeviceInfo` |
+| **ERROR 13** | `RPC_SET_AUTH` | RPC `Shelly.SetAuth` |
+| **ERROR 99** | `UNKNOWN` | Error inesperado |
+
+Los RPC (7–13) se envuelven en `ShellyDeviceProvisioner` vía `Step4ProvisionException`. El ViewModel mapea los fallos de API/BLE a los códigos 1–6 y 99.
 
 ### Paso 5 — Esperando conexión (`Step5WaitingScreen`)
 
@@ -257,7 +280,8 @@ wifiSsid, wifiPassword, wifiPasswordVisible, wifiSsidTouched,
 wifiScanPhase, nearbyWifiNetworks, wifiScanErrorMessage, showWifiNetworkSheet
 
 // Paso 4
-provisionPhase, shellyProvisionStep, provisionErrorMessage
+provisionPhase, shellyProvisionStep, provisionErrorCode, provisionErrorMessage
+// provisionErrorCode = Int de Step4Error (ver §6 Paso 4)
 
 // Paso 5
 onlineWaitPhase, onlineWaitErrorMessage

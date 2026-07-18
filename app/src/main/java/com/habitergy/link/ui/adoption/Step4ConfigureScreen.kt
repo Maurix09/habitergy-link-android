@@ -19,6 +19,8 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.habitergy.link.domain.model.AdoptionUiState
@@ -57,7 +59,7 @@ fun Step4ConfigureScreen(
             ScreenTitle(
                 title = "Configurá el controlador",
                 subtitle = when (state.provisionPhase) {
-                    ProvisionPhase.Error -> statusLine
+                    ProvisionPhase.Error -> "Anotá el código de error para diagnosticar el problema."
                     ProvisionPhase.Done -> "Listo. Ahora esperamos que se conecte a internet."
                     else -> "Esto puede tardar unos segundos. No apagues el teléfono ni el controlador."
                 },
@@ -78,6 +80,18 @@ fun Step4ConfigureScreen(
                             tint = HabitergyColors.Error,
                             modifier = Modifier.size(48.dp),
                         )
+                        val code = state.provisionErrorCode
+                        if (code != null) {
+                            Text(
+                                text = "ERROR $code",
+                                style = MaterialTheme.typography.headlineSmall.copy(
+                                    fontFamily = FontFamily.Monospace,
+                                    fontWeight = FontWeight.Bold,
+                                ),
+                                color = HabitergyColors.Error,
+                                textAlign = TextAlign.Center,
+                            )
+                        }
                         Text(
                             text = statusLine,
                             style = MaterialTheme.typography.bodyLarge,
@@ -156,8 +170,12 @@ private fun provisionStatusLine(state: AdoptionUiState): String {
         }
         ProvisionPhase.Rebooting -> "Reiniciando el controlador…"
         ProvisionPhase.Done -> "Configuración completada"
-        ProvisionPhase.Error -> state.provisionErrorMessage
-            ?: "No pudimos completar la configuración."
+        ProvisionPhase.Error -> {
+            // Mensaje completo: "ERROR N — etapa\ndetalle". El código va aparte en UI.
+            val full = state.provisionErrorMessage
+                ?: "No pudimos completar la configuración."
+            full.replaceFirst(Regex("^ERROR \\d+ — "), "").trim()
+        }
     }
 }
 

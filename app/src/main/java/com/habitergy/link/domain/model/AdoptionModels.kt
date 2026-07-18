@@ -189,6 +189,8 @@ data class AdoptionUiState(
     // Paso 4
     val provisionPhase: ProvisionPhase = ProvisionPhase.Idle,
     val shellyProvisionStep: ShellyProvisionStep? = null,
+    /** Código numérico de [Step4Error] cuando [provisionPhase] es Error. */
+    val provisionErrorCode: Int? = null,
     val provisionErrorMessage: String? = null,
     // Paso 5
     val onlineWaitPhase: OnlineWaitPhase = OnlineWaitPhase.Idle,

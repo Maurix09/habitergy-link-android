@@ -1,7 +1,11 @@
 package com.habitergy.link.data.ble
 
 import com.habitergy.link.domain.model.ShellyProvisionStep
+import com.habitergy.link.domain.model.Step4Error
+import com.habitergy.link.domain.model.Step4ProvisionException
+import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
@@ -15,6 +19,9 @@ import java.security.MessageDigest
  * BLE exige digest auth en el siguiente RPC y `Shelly.Reboot` falla (p. ej.
  * "Unsupported Media Type"). Con `delay_ms` el dispositivo reinicia después
  * de aplicar la contraseña en flash.
+ *
+ * Cada fallo lanza [Step4ProvisionException] con el código de diagnóstico
+ * correspondiente (ERROR 7–13).
  */
 class ShellyDeviceProvisioner(
     private val rpcClient: ShellyBleRpcClient,
@@ -27,7 +34,8 @@ class ShellyDeviceProvisioner(
         onStep: (ShellyProvisionStep) -> Unit,
     ) {
         onStep(ShellyProvisionStep.DisableCloud)
-        rpcClient.call(
+        callRpc(
+            error = Step4Error.RPC_CLOUD,
             method = "Cloud.SetConfig",
             params = buildJsonObject {
                 put("config", buildJsonObject { put("enable", false) })
@@ -35,7 +43,8 @@ class ShellyDeviceProvisioner(
         )
 
         onStep(ShellyProvisionStep.SetDeviceName)
-        rpcClient.call(
+        callRpc(
+            error = Step4Error.RPC_SYS,
             method = "Sys.SetConfig",
             params = buildJsonObject {
                 put("config", buildJsonObject {
@@ -56,14 +65,16 @@ class ShellyDeviceProvisioner(
                 }
             })
         }
-        rpcClient.call(
+        callRpc(
+            error = Step4Error.RPC_WIFI,
             method = "Wifi.SetConfig",
             params = buildJsonObject { put("config", wifiConfig) },
         )
 
         onStep(ShellyProvisionStep.ConfigureMqtt)
         val clientId = normalizeMac(macAddress)
-        rpcClient.call(
+        callRpc(
+            error = Step4Error.RPC_MQTT,
             method = "Mqtt.SetConfig",
             params = buildJsonObject {
                 put("config", buildJsonObject {
@@ -84,7 +95,8 @@ class ShellyDeviceProvisioner(
 
         // Agendar reboot antes de SetAuth (ver KDoc de la clase).
         onStep(ShellyProvisionStep.Reboot)
-        rpcClient.call(
+        callRpc(
+            error = Step4Error.RPC_REBOOT,
             method = "Shelly.Reboot",
             params = buildJsonObject {
                 put("delay_ms", REBOOT_DELAY_MS)
@@ -92,17 +104,46 @@ class ShellyDeviceProvisioner(
         )
 
         onStep(ShellyProvisionStep.SetAdminAuth)
-        val deviceInfo = rpcClient.call(method = "Shelly.GetDeviceInfo")
+        val deviceInfo = callRpc(
+            error = Step4Error.RPC_GET_DEVICE_INFO,
+            method = "Shelly.GetDeviceInfo",
+        )
         val deviceId = deviceInfo["id"]?.jsonPrimitive?.content
-            ?: throw ShellyBleRpcException("No pudimos leer el ID del controlador Shelly.")
+            ?: throw Step4ProvisionException(
+                Step4Error.RPC_GET_DEVICE_INFO,
+                "Respuesta sin campo id.",
+            )
         val ha1 = computeAdminHa1(deviceId, ShellyProvisioningConfig.ADMIN_PASSWORD)
-        rpcClient.call(
+        callRpc(
+            error = Step4Error.RPC_SET_AUTH,
             method = "Shelly.SetAuth",
             params = buildJsonObject {
                 put("user", "admin")
                 put("realm", deviceId)
                 put("ha1", ha1)
             },
+        )
+    }
+
+    private suspend fun callRpc(
+        error: Step4Error,
+        method: String,
+        params: JsonObject? = null,
+    ): JsonObject = try {
+        rpcClient.call(method = method, params = params)
+    } catch (exception: CancellationException) {
+        throw exception
+    } catch (exception: ShellyBleRpcException) {
+        throw Step4ProvisionException(
+            error = error,
+            detail = exception.message ?: "Fallo RPC $method",
+            cause = exception,
+        )
+    } catch (exception: Exception) {
+        throw Step4ProvisionException(
+            error = error,
+            detail = exception.message ?: "Fallo inesperado en $method",
+            cause = exception,
         )
     }
 

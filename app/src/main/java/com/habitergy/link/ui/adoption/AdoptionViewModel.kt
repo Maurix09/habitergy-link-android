@@ -31,6 +31,8 @@ import com.habitergy.link.domain.model.ProvisionPhase
 import com.habitergy.link.domain.model.ResolvedDevice
 import com.habitergy.link.domain.model.ScannedShellyDevice
 import com.habitergy.link.domain.model.ShellyProvisionStep
+import com.habitergy.link.domain.model.Step4Error
+import com.habitergy.link.domain.model.Step4ProvisionException
 import com.habitergy.link.domain.model.UNKNOWN_DEVICE_CODE
 import com.habitergy.link.domain.model.WifiScanPhase
 import kotlinx.coroutines.CancellationException
@@ -151,6 +153,7 @@ class AdoptionViewModel(
                 currentStep = 4,
                 provisionPhase = ProvisionPhase.Idle,
                 shellyProvisionStep = null,
+                provisionErrorCode = null,
                 provisionErrorMessage = null,
                 onlineWaitPhase = OnlineWaitPhase.Idle,
                 onlineWaitErrorMessage = null,
@@ -167,12 +170,10 @@ class AdoptionViewModel(
             return
         }
         if (!state.canStartStep4) {
-            _uiState.update {
-                it.copy(
-                    provisionPhase = ProvisionPhase.Error,
-                    provisionErrorMessage = "Necesitamos un código de controlador válido y una conexión Bluetooth.",
-                )
-            }
+            failProvision(
+                Step4Error.MISSING_PREREQUISITES,
+                "Necesitamos un código de controlador válido y una conexión Bluetooth.",
+            )
             return
         }
         runStep4Provisioning()
@@ -185,6 +186,7 @@ class AdoptionViewModel(
             it.copy(
                 provisionPhase = ProvisionPhase.Idle,
                 shellyProvisionStep = null,
+                provisionErrorCode = null,
                 provisionErrorMessage = null,
             )
         }
@@ -199,6 +201,7 @@ class AdoptionViewModel(
                 currentStep = 3,
                 provisionPhase = ProvisionPhase.Idle,
                 shellyProvisionStep = null,
+                provisionErrorCode = null,
                 provisionErrorMessage = null,
             )
         }
@@ -251,6 +254,7 @@ class AdoptionViewModel(
                 _uiState.update {
                     it.copy(
                         provisionPhase = ProvisionPhase.ProvisioningBroker,
+                        provisionErrorCode = null,
                         provisionErrorMessage = null,
                         shellyProvisionStep = null,
                     )
@@ -259,25 +263,45 @@ class AdoptionViewModel(
                 when (val brokerResult = repository.provision(resolved.deviceCode)) {
                     is AdoptionProvisionResult.Success -> Unit
                     is AdoptionProvisionResult.NotFound -> {
-                        failProvision("No encontramos el controlador en el sistema.")
+                        failProvision(
+                            Step4Error.BROKER_NOT_FOUND,
+                            "No encontramos el controlador en el sistema.",
+                        )
                         return@launch
                     }
                     is AdoptionProvisionResult.Conflict -> {
-                        failProvision("Este controlador ya no está disponible para adoptar.")
+                        failProvision(
+                            Step4Error.BROKER_CONFLICT,
+                            "Este controlador ya no está disponible para adoptar.",
+                        )
                         return@launch
                     }
                     is AdoptionProvisionResult.ApiError -> {
-                        failProvision(brokerResult.message)
+                        failProvision(Step4Error.BROKER_API, brokerResult.message)
                         return@launch
                     }
                     AdoptionProvisionResult.NetworkError -> {
-                        failProvision("No pudimos contactar al servidor. Revisá tu conexión a internet.")
+                        failProvision(
+                            Step4Error.BROKER_NETWORK,
+                            "No pudimos contactar al servidor. Revisá tu conexión a internet.",
+                        )
                         return@launch
                     }
                 }
 
                 _uiState.update { it.copy(provisionPhase = ProvisionPhase.ConnectingBle) }
-                shellyRpcClient.connect(selected.id)
+                try {
+                    shellyRpcClient.connect(selected.id)
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (error: Exception) {
+                    throw Step4ProvisionException(
+                        error = Step4Error.BLE_CONNECT,
+                        detail = error.message
+                            ?: "No se pudo conectar por Bluetooth al controlador.",
+                        cause = error,
+                    )
+                }
 
                 _uiState.update { it.copy(provisionPhase = ProvisionPhase.ConfiguringShelly) }
                 shellyProvisioner.configure(
@@ -302,10 +326,16 @@ class AdoptionViewModel(
                 runOnlinePoll()
             } catch (error: CancellationException) {
                 throw error
+            } catch (error: Step4ProvisionException) {
+                failProvision(error.error, error.detail)
             } catch (error: ShellyBleRpcException) {
-                failProvision(error.message ?: "Error de comunicación Bluetooth con el controlador.")
+                failProvision(
+                    Step4Error.UNKNOWN,
+                    error.message ?: "Error de comunicación Bluetooth con el controlador.",
+                )
             } catch (error: Exception) {
                 failProvision(
+                    Step4Error.UNKNOWN,
                     error.message ?: "No pudimos configurar el controlador. Intentá de nuevo.",
                 )
             } finally {
@@ -314,11 +344,12 @@ class AdoptionViewModel(
         }
     }
 
-    private fun failProvision(message: String) {
+    private fun failProvision(error: Step4Error, detail: String) {
         _uiState.update {
             it.copy(
                 provisionPhase = ProvisionPhase.Error,
-                provisionErrorMessage = message,
+                provisionErrorCode = error.code,
+                provisionErrorMessage = error.formatMessage(detail),
             )
         }
     }
