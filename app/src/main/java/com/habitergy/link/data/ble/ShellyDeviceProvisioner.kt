@@ -9,7 +9,12 @@ import java.security.MessageDigest
 
 /**
  * Orquesta la secuencia RPC-over-BLE del paso 4:
- * Cloud off → nombre → WiFi → MQTT → auth admin → reboot.
+ * Cloud off → nombre → WiFi → MQTT → reboot (con delay) → auth admin.
+ *
+ * El reboot se agenda **antes** de SetAuth: al activar autenticación, el canal
+ * BLE exige digest auth en el siguiente RPC y `Shelly.Reboot` falla (p. ej.
+ * "Unsupported Media Type"). Con `delay_ms` el dispositivo reinicia después
+ * de aplicar la contraseña en flash.
  */
 class ShellyDeviceProvisioner(
     private val rpcClient: ShellyBleRpcClient,
@@ -77,6 +82,15 @@ class ShellyDeviceProvisioner(
             },
         )
 
+        // Agendar reboot antes de SetAuth (ver KDoc de la clase).
+        onStep(ShellyProvisionStep.Reboot)
+        rpcClient.call(
+            method = "Shelly.Reboot",
+            params = buildJsonObject {
+                put("delay_ms", REBOOT_DELAY_MS)
+            },
+        )
+
         onStep(ShellyProvisionStep.SetAdminAuth)
         val deviceInfo = rpcClient.call(method = "Shelly.GetDeviceInfo")
         val deviceId = deviceInfo["id"]?.jsonPrimitive?.content
@@ -90,9 +104,6 @@ class ShellyDeviceProvisioner(
                 put("ha1", ha1)
             },
         )
-
-        onStep(ShellyProvisionStep.Reboot)
-        rpcClient.call(method = "Shelly.Reboot")
     }
 
     private fun computeAdminHa1(deviceId: String, password: String): String {
@@ -100,5 +111,10 @@ class ShellyDeviceProvisioner(
         val digest = MessageDigest.getInstance("SHA-256")
         return digest.digest(input.toByteArray(Charsets.UTF_8))
             .joinToString("") { byte -> "%02x".format(byte) }
+    }
+
+    private companion object {
+        /** Tiempo suficiente para SetAuth + disconnect antes del reinicio. */
+        const val REBOOT_DELAY_MS = 2_500
     }
 }

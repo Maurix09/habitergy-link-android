@@ -15,9 +15,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
@@ -72,13 +72,19 @@ class ShellyBleRpcClient(
         }
     }
 
-    suspend fun call(method: String, params: JsonObject = buildJsonObject {}): JsonObject =
+    /**
+     * @param params RPC params. Omitidos del frame cuando son null o vacíos
+     * (métodos como [Shelly.Reboot] sin argumentos).
+     */
+    suspend fun call(method: String, params: JsonObject? = null): JsonObject =
         withContext(Dispatchers.IO) {
             val request = buildJsonObject {
                 put("id", rpcId.getAndIncrement())
                 put("method", method)
-                put("params", params)
                 put("src", "habitergy-link")
+                if (params != null && params.isNotEmpty()) {
+                    put("params", params)
+                }
             }
             val payload = Json.encodeToString(JsonObject.serializer(), request).toByteArray(Charsets.UTF_8)
             sendRpcPayload(payload)
@@ -93,7 +99,11 @@ class ShellyBleRpcClient(
                 val message = error?.get("message")?.jsonPrimitive?.content ?: responseText
                 throw ShellyBleRpcException("RPC $method falló: $message")
             }
-            response["result"]?.jsonObject ?: buildJsonObject {}
+            when (val result = response["result"]) {
+                null, JsonNull -> buildJsonObject {}
+                is JsonObject -> result
+                else -> buildJsonObject {}
+            }
         }
 
     @SuppressLint("MissingPermission")

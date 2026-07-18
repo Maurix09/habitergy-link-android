@@ -136,8 +136,9 @@ enum class ShellyProvisionStep {
     SetDeviceName,
     ConfigureWifi,
     ConfigureMqtt,
-    SetAdminAuth,
+    /** Reboot agendado con delay; va antes de SetAuth (BLE sin digest). */
     Reboot,
+    SetAdminAuth,
 }
 
 /** Fases del paso 4 (provisioner + configuración BLE). */
