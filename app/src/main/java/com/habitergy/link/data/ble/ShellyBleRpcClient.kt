@@ -8,12 +8,15 @@ import android.bluetooth.BluetoothGattCallback
 import android.bluetooth.BluetoothGattCharacteristic
 import android.bluetooth.BluetoothGattDescriptor
 import android.bluetooth.BluetoothProfile
+import android.bluetooth.BluetoothStatusCodes
 import android.content.Context
 import android.os.Build
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
@@ -29,7 +32,13 @@ class ShellyBleRpcException(message: String, cause: Throwable? = null) : Excepti
 
 /**
  * Cliente RPC-over-BLE para Shelly Gen2+ (Gen3/Gen4).
- * Conecta por GATT, envía JSON-RPC 2.0 y lee la respuesta.
+ *
+ * Protocolo (Shelly KB / Mongoose OS GATT RPC):
+ * 1. Escribir longitud del frame (uint32 **big-endian**) en TX Control.
+ * 2. Escribir el JSON UTF-8 en Data en **chunks ≤ MTU−3**.
+ * 3. Leer longitud (big-endian) de RX Control y luego Data en chunks.
+ *
+ * @see https://kb.shelly.cloud/knowledge-base/kbsa-communicating-with-shelly-devices-via-bluetoo
  */
 class ShellyBleRpcClient(
     private val context: Context,
@@ -40,20 +49,26 @@ class ShellyBleRpcClient(
     private var txChar: BluetoothGattCharacteristic? = null
     private var rxChar: BluetoothGattCharacteristic? = null
 
+    /** ATT MTU negociado; el payload útil es mtu − 3 (opcode + handle). */
+    private var negotiatedMtu: Int = DEFAULT_ATT_MTU
+
     private var connectDeferred: CompletableDeferred<Unit>? = null
+    private var mtuDeferred: CompletableDeferred<Int>? = null
     private var discoverDeferred: CompletableDeferred<Unit>? = null
     private var writeDeferred: CompletableDeferred<Unit>? = null
     private var readDeferred: CompletableDeferred<ByteArray>? = null
 
-  @SuppressLint("MissingPermission")
+    @SuppressLint("MissingPermission")
     suspend fun connect(deviceAddress: String) = withContext(Dispatchers.IO) {
         disconnect()
+        negotiatedMtu = DEFAULT_ATT_MTU
         val adapter = BluetoothAdapter.getDefaultAdapter()
             ?: throw ShellyBleRpcException("Bluetooth no disponible en este dispositivo.")
         val device: BluetoothDevice = adapter.getRemoteDevice(deviceAddress)
 
         withTimeout(CONNECT_TIMEOUT_MS) {
             connectDeferred = CompletableDeferred()
+            mtuDeferred = CompletableDeferred()
             discoverDeferred = CompletableDeferred()
 
             gatt = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
@@ -64,6 +79,16 @@ class ShellyBleRpcClient(
             } ?: throw ShellyBleRpcException("No se pudo iniciar la conexión BLE.")
 
             connectDeferred?.await()
+            // Esperar MTU; si timeout, descubrir servicios con MTU default.
+            val mtuResult = withTimeoutOrNull(MTU_TIMEOUT_MS) { mtuDeferred?.await() }
+            if (mtuResult != null) {
+                negotiatedMtu = mtuResult
+            } else {
+                negotiatedMtu = DEFAULT_ATT_MTU
+                if (discoverDeferred?.isCompleted != true) {
+                    gatt?.discoverServices()
+                }
+            }
             discoverDeferred?.await()
         }
 
@@ -114,11 +139,14 @@ class ShellyBleRpcClient(
         dataChar = null
         txChar = null
         rxChar = null
+        negotiatedMtu = DEFAULT_ATT_MTU
         connectDeferred?.cancel()
+        mtuDeferred?.cancel()
         discoverDeferred?.cancel()
         writeDeferred?.cancel()
         readDeferred?.cancel()
         connectDeferred = null
+        mtuDeferred = null
         discoverDeferred = null
         writeDeferred = null
         readDeferred = null
@@ -129,16 +157,26 @@ class ShellyBleRpcClient(
         val tx = txChar ?: throw ShellyBleRpcException("Canal TX no disponible.")
         val data = dataChar ?: throw ShellyBleRpcException("Canal de datos no disponible.")
 
+        // Shelly KB / Mongoose OS: uint32 big-endian.
         val lengthBytes = ByteBuffer.allocate(4)
-            .order(ByteOrder.LITTLE_ENDIAN)
+            .order(ByteOrder.BIG_ENDIAN)
             .putInt(payload.size)
             .array()
 
         writeCharacteristic(tx, lengthBytes)
-        writeCharacteristic(data, payload)
+        // Breve pausa para que el dispositivo prepare el buffer (recomendado por Shelly KB).
+        delay(TX_LENGTH_SETTLE_MS)
+
+        val chunkSize = maxWriteChunkSize()
+        var offset = 0
+        while (offset < payload.size) {
+            val end = minOf(offset + chunkSize, payload.size)
+            writeCharacteristic(data, payload.copyOfRange(offset, end))
+            offset = end
+        }
     }
 
-  @SuppressLint("MissingPermission")
+    @SuppressLint("MissingPermission")
     private suspend fun readRpcPayload(): ByteArray {
         val rx = rxChar ?: throw ShellyBleRpcException("Canal RX no disponible.")
         val data = dataChar ?: throw ShellyBleRpcException("Canal de datos no disponible.")
@@ -148,7 +186,7 @@ class ShellyBleRpcClient(
             return ByteArray(0)
         }
         val length = ByteBuffer.wrap(lengthBytes.copyOf(4))
-            .order(ByteOrder.LITTLE_ENDIAN)
+            .order(ByteOrder.BIG_ENDIAN)
             .int
         if (length <= 0) {
             return ByteArray(0)
@@ -162,12 +200,12 @@ class ShellyBleRpcClient(
             val copyLen = minOf(chunk.size, length - offset)
             System.arraycopy(chunk, 0, buffer, offset, copyLen)
             offset += copyLen
-            if (chunk.size < (dataChar?.value?.size ?: chunk.size)) {
-                break
-            }
         }
         return buffer.copyOf(offset)
     }
+
+    /** Bytes útiles por write ATT: MTU − 3 (ATT_OP_WRITE_REQ + handle). */
+    private fun maxWriteChunkSize(): Int = (negotiatedMtu - ATT_HEADER_BYTES).coerceAtLeast(DEFAULT_CHUNK_SIZE)
 
     @SuppressLint("MissingPermission")
     private suspend fun writeCharacteristic(
@@ -176,9 +214,21 @@ class ShellyBleRpcClient(
     ) {
         val g = gatt ?: throw ShellyBleRpcException("GATT desconectado.")
         writeDeferred = CompletableDeferred()
-        characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
-        characteristic.value = value
-        if (!g.writeCharacteristic(characteristic)) {
+        val started = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            g.writeCharacteristic(
+                characteristic,
+                value,
+                BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT,
+            ) == BluetoothStatusCodes.SUCCESS
+        } else {
+            @Suppress("DEPRECATION")
+            characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+            @Suppress("DEPRECATION")
+            characteristic.value = value
+            @Suppress("DEPRECATION")
+            g.writeCharacteristic(characteristic)
+        }
+        if (!started) {
             writeDeferred = null
             throw ShellyBleRpcException("No se pudo escribir en el controlador Shelly.")
         }
@@ -207,12 +257,19 @@ class ShellyBleRpcClient(
         @SuppressLint("MissingPermission")
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
             if (newState == BluetoothProfile.STATE_CONNECTED) {
-                gatt.requestMtu(512)
-                gatt.discoverServices()
+                // Pedir MTU primero; discoverServices se dispara tras onMtuChanged (o fallback).
+                val mtuRequested = gatt.requestMtu(REQUESTED_MTU)
+                if (!mtuRequested) {
+                    mtuDeferred?.complete(DEFAULT_ATT_MTU)
+                    gatt.discoverServices()
+                }
                 connectDeferred?.complete(Unit)
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                 connectDeferred?.completeExceptionally(
                     ShellyBleRpcException("Conexión BLE interrumpida (status=$status)."),
+                )
+                mtuDeferred?.completeExceptionally(
+                    ShellyBleRpcException("Conexión BLE interrumpida."),
                 )
                 discoverDeferred?.completeExceptionally(
                     ShellyBleRpcException("Conexión BLE interrumpida."),
@@ -220,8 +277,15 @@ class ShellyBleRpcClient(
             }
         }
 
+        @SuppressLint("MissingPermission")
         override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) {
-            // MTU negotiation complete; service discovery already triggered.
+            val effective = if (status == BluetoothGatt.GATT_SUCCESS) mtu else DEFAULT_ATT_MTU
+            negotiatedMtu = effective
+            mtuDeferred?.complete(effective)
+            // Descubrir servicios recién cuando el MTU está listo.
+            if (discoverDeferred?.isCompleted != true && dataChar == null) {
+                gatt.discoverServices()
+            }
         }
 
         override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
@@ -265,6 +329,7 @@ class ShellyBleRpcClient(
             status: Int,
         ) {
             if (status == BluetoothGatt.GATT_SUCCESS) {
+                @Suppress("DEPRECATION")
                 readDeferred?.complete(characteristic.value ?: ByteArray(0))
             } else {
                 readDeferred?.completeExceptionally(
@@ -299,6 +364,13 @@ class ShellyBleRpcClient(
 
     private companion object {
         const val CONNECT_TIMEOUT_MS = 30_000L
+        const val MTU_TIMEOUT_MS = 5_000L
         const val RPC_TIMEOUT_MS = 15_000L
+        const val TX_LENGTH_SETTLE_MS = 50L
+        const val REQUESTED_MTU = 512
+        /** ATT MTU por defecto antes de negociar. */
+        const val DEFAULT_ATT_MTU = 23
+        const val ATT_HEADER_BYTES = 3
+        const val DEFAULT_CHUNK_SIZE = 20
     }
 }
