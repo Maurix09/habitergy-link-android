@@ -136,7 +136,7 @@ enum class ShellyProvisionStep {
     SetDeviceName,
     ConfigureWifi,
     ConfigureMqtt,
-    /** GetDeviceInfo + SetAuth; debe ir antes del reboot. */
+    /** GetDeviceInfo (inicio) + SetAuth; digest auth queda activo para el reboot. */
     SetAdminAuth,
     /** Reboot al final: tras agendarlo el firmware rechaza más RPC. */
     Reboot,

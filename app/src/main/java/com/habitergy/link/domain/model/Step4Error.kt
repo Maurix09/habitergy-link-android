@@ -21,8 +21,8 @@ package com.habitergy.link.domain.model
  * | 13 | RPC Shelly.SetAuth |
  * | 99 | Error inesperado |
  *
- * Orden real del pipeline BLE: Cloud → Sys → Wifi → Mqtt → GetDeviceInfo →
- * SetAuth → Reboot (el reboot siempre al final).
+ * Orden real del pipeline BLE: GetDeviceInfo → Cloud → Sys → Wifi → Mqtt →
+ * SetAuth → Reboot (digest auth tras SetAuth / en reintentos; reboot al final).
  */
 enum class Step4Error(
     val code: Int,

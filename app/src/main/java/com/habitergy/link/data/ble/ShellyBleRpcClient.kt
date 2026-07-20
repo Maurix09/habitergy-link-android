@@ -21,6 +21,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
@@ -38,7 +39,11 @@ class ShellyBleRpcException(message: String, cause: Throwable? = null) : Excepti
  * 2. Escribir el JSON UTF-8 en Data en **chunks ≤ MTU−3**.
  * 3. Leer longitud (big-endian) de RX Control y luego Data en chunks.
  *
+ * Si hay digest auth configurado y el dispositivo responde 401, reintenta
+ * una vez con el objeto `auth` (SHA-256, HA2=`dummy_method:dummy_uri`).
+ *
  * @see https://kb.shelly.cloud/knowledge-base/kbsa-communicating-with-shelly-devices-via-bluetoo
+ * @see https://shelly-api-docs.shelly.cloud/gen2/General/Authentication/
  */
 class ShellyBleRpcClient(
     private val context: Context,
@@ -52,11 +57,30 @@ class ShellyBleRpcClient(
     /** ATT MTU negociado; el payload útil es mtu − 3 (opcode + handle). */
     private var negotiatedMtu: Int = DEFAULT_ATT_MTU
 
+    /** Credenciales digest; el nonce se completa tras el primer 401. */
+    private var digestAuth: ShellyDigestAuth? = null
+
     private var connectDeferred: CompletableDeferred<Unit>? = null
     private var mtuDeferred: CompletableDeferred<Int>? = null
     private var discoverDeferred: CompletableDeferred<Unit>? = null
     private var writeDeferred: CompletableDeferred<Unit>? = null
     private var readDeferred: CompletableDeferred<ByteArray>? = null
+
+    /**
+     * Prepara digest auth (usuario siempre `admin` en Shelly Gen2+).
+     * El primer RPC protegido obtiene el nonce vía 401 y reintenta.
+     */
+    fun setDigestAuth(realm: String, password: String, username: String = "admin") {
+        digestAuth = ShellyDigestAuth(
+            username = username,
+            password = password,
+            realm = realm,
+        )
+    }
+
+    fun clearDigestAuth() {
+        digestAuth = null
+    }
 
     @SuppressLint("MissingPermission")
     suspend fun connect(deviceAddress: String) = withContext(Dispatchers.IO) {
@@ -103,33 +127,53 @@ class ShellyBleRpcClient(
      */
     suspend fun call(method: String, params: JsonObject? = null): JsonObject =
         withContext(Dispatchers.IO) {
-            val request = buildJsonObject {
-                put("id", rpcId.getAndIncrement())
-                put("method", method)
-                put("src", "habitergy-link")
-                if (params != null && params.isNotEmpty()) {
-                    put("params", params)
-                }
+            callInternal(method = method, params = params, allowAuthRetry = true)
+        }
+
+    private suspend fun callInternal(
+        method: String,
+        params: JsonObject?,
+        allowAuthRetry: Boolean,
+    ): JsonObject {
+        val auth = digestAuth
+        val request = buildJsonObject {
+            put("id", rpcId.getAndIncrement())
+            put("method", method)
+            put("src", "habitergy-link")
+            if (params != null && params.isNotEmpty()) {
+                put("params", params)
             }
-            val payload = Json.encodeToString(JsonObject.serializer(), request).toByteArray(Charsets.UTF_8)
-            sendRpcPayload(payload)
-            val responseBytes = readRpcPayload()
-            val responseText = responseBytes.toString(Charsets.UTF_8).trim()
-            if (responseText.isEmpty()) {
-                return@withContext buildJsonObject {}
-            }
-            val response = Json.parseToJsonElement(responseText).jsonObject
-            if (response.containsKey("error")) {
-                val error = response["error"]?.jsonObject
-                val message = error?.get("message")?.jsonPrimitive?.content ?: responseText
-                throw ShellyBleRpcException("RPC $method falló: $message")
-            }
-            when (val result = response["result"]) {
-                null, JsonNull -> buildJsonObject {}
-                is JsonObject -> result
-                else -> buildJsonObject {}
+            // Solo adjuntar auth cuando ya tenemos nonce (tras un 401 previo).
+            if (auth != null && auth.hasNonce) {
+                put("auth", auth.buildAuthObject())
             }
         }
+        val payload = Json.encodeToString(JsonObject.serializer(), request).toByteArray(Charsets.UTF_8)
+        sendRpcPayload(payload)
+        val responseBytes = readRpcPayload()
+        val responseText = responseBytes.toString(Charsets.UTF_8).trim()
+        if (responseText.isEmpty()) {
+            return buildJsonObject {}
+        }
+        val response = Json.parseToJsonElement(responseText).jsonObject
+        val error = response["error"]?.jsonObject
+        if (error != null) {
+            val message = error["message"]?.jsonPrimitive?.contentOrNull ?: responseText
+            val code = ShellyDigestAuth.errorCode(error)
+            if (code == 401 && allowAuthRetry && auth != null) {
+                val challenge = ShellyDigestAuth.parseChallengeMessage(message)
+                    ?: throw ShellyBleRpcException("RPC $method falló: $message")
+                auth.updateChallenge(challenge)
+                return callInternal(method = method, params = params, allowAuthRetry = false)
+            }
+            throw ShellyBleRpcException("RPC $method falló: $message")
+        }
+        return when (val result = response["result"]) {
+            null, JsonNull -> buildJsonObject {}
+            is JsonObject -> result
+            else -> buildJsonObject {}
+        }
+    }
 
     @SuppressLint("MissingPermission")
     fun disconnect() {
@@ -140,6 +184,7 @@ class ShellyBleRpcClient(
         txChar = null
         rxChar = null
         negotiatedMtu = DEFAULT_ATT_MTU
+        digestAuth = null
         connectDeferred?.cancel()
         mtuDeferred?.cancel()
         discoverDeferred?.cancel()

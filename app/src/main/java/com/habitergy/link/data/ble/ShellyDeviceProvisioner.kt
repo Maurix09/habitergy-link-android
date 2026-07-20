@@ -9,16 +9,17 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
-import java.security.MessageDigest
 
 /**
  * Orquesta la secuencia RPC-over-BLE del paso 4:
- * Cloud off → nombre → WiFi → MQTT → auth admin → reboot (con delay).
+ * GetDeviceInfo → Cloud off → nombre → WiFi → MQTT → auth admin → reboot.
  *
- * El reboot va **al final**. Tras `Shelly.Reboot` el firmware rechaza RPC
- * posteriores con `-109` / `shutting down in X ms`, así que `GetDeviceInfo`
- * y `SetAuth` deben completarse antes. El `delay_ms` da margen para
- * desconectar GATT limpio antes del reinicio real.
+ * [Shelly.GetDeviceInfo] va primero porque es el único RPC que sigue
+ * disponible con auth habilitada (reintentos tras un SetAuth previo).
+ * Tras SetAuth, el cliente usa digest SHA-256 para Reboot y demás RPC.
+ *
+ * El reboot va **al final**: tras agendarlo el firmware rechaza más RPC
+ * (`shutting down in X ms`). El `delay_ms` da margen para desconectar GATT.
  *
  * Cada fallo lanza [Step4ProvisionException] con el código de diagnóstico
  * correspondiente (ERROR 7–13).
@@ -33,6 +34,21 @@ class ShellyDeviceProvisioner(
         macAddress: String,
         onStep: (ShellyProvisionStep) -> Unit,
     ) {
+        // GetDeviceInfo no requiere auth; sirve para realm y para reintentos.
+        val deviceInfo = callRpc(
+            error = Step4Error.RPC_GET_DEVICE_INFO,
+            method = "Shelly.GetDeviceInfo",
+        )
+        val deviceId = deviceInfo["id"]?.jsonPrimitive?.content
+            ?: throw Step4ProvisionException(
+                Step4Error.RPC_GET_DEVICE_INFO,
+                "Respuesta sin campo id.",
+            )
+        rpcClient.setDigestAuth(
+            realm = deviceId,
+            password = ShellyProvisioningConfig.ADMIN_PASSWORD,
+        )
+
         onStep(ShellyProvisionStep.DisableCloud)
         callRpc(
             error = Step4Error.RPC_CLOUD,
@@ -93,18 +109,10 @@ class ShellyDeviceProvisioner(
             },
         )
 
-        // Auth antes del reboot: el firmware rechaza RPC tras Shelly.Reboot.
         onStep(ShellyProvisionStep.SetAdminAuth)
-        val deviceInfo = callRpc(
-            error = Step4Error.RPC_GET_DEVICE_INFO,
-            method = "Shelly.GetDeviceInfo",
+        val ha1 = ShellyDigestAuth.sha256Hex(
+            "admin:$deviceId:${ShellyProvisioningConfig.ADMIN_PASSWORD}",
         )
-        val deviceId = deviceInfo["id"]?.jsonPrimitive?.content
-            ?: throw Step4ProvisionException(
-                Step4Error.RPC_GET_DEVICE_INFO,
-                "Respuesta sin campo id.",
-            )
-        val ha1 = computeAdminHa1(deviceId, ShellyProvisioningConfig.ADMIN_PASSWORD)
         callRpc(
             error = Step4Error.RPC_SET_AUTH,
             method = "Shelly.SetAuth",
@@ -145,13 +153,6 @@ class ShellyDeviceProvisioner(
             detail = exception.message ?: "Fallo inesperado en $method",
             cause = exception,
         )
-    }
-
-    private fun computeAdminHa1(deviceId: String, password: String): String {
-        val input = "admin:$deviceId:$password"
-        val digest = MessageDigest.getInstance("SHA-256")
-        return digest.digest(input.toByteArray(Charsets.UTF_8))
-            .joinToString("") { byte -> "%02x".format(byte) }
     }
 
     private companion object {
