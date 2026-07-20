@@ -12,7 +12,7 @@ Este archivo provee contexto esencial para cualquier agente de IA (LLM) que deba
 | **Propósito** | Wizard nativo de adopción de controladores **Shelly 1PM Gen3/Gen4** (BLE, WiFi, provisioning) |
 | **Stack** | Kotlin + Jetpack Compose + Material 3 |
 | **Build** | Gradle ( **no** forma parte de pnpm/Turbo del monorepo ) |
-| **Versión actual** | `0.1.25` — pasos **1–5** (lookup, BLE, WiFi, provisioner + RPC BLE, espera online) |
+| **Versión actual** | `0.1.26` — pasos **1–5** (lookup, BLE, WiFi, provisioner + RPC BLE, espera online) |
 | **Play Store (planeado)** | Habitergy Link |
 
 Link reemplaza el wizard web de adopción en Android: acceso nativo a BLE, WiFi y provisioning sin limitaciones de Web Bluetooth ni mixed content.
@@ -322,7 +322,7 @@ Propiedades derivadas en `AdoptionUiState`:
 | Validación checksum device_code | **Real** (`domain/DeviceCode.kt`, réplica de `nanoId.ts`) |
 | Lookup deviceCode → MAC/model/status | **Real** (`GET /api/adoption/devices/:deviceCode`) |
 | Provision broker MQTT | **Real** (`POST /api/adoption/devices/:deviceCode/provision`) |
-| Poll online | **Real** (`GET /api/adoption/devices/:deviceCode/online`) |
+| Poll online | **Real** (`GET /api/adoption/devices/:deviceCode/online`; requiere mqtt-worker con topics `habitergy/v1/...`) |
 | Cliente HTTP (Ktor) | **Real** |
 | Escaneo QR | **Placeholder** (botón + snackbar «Coming soon») |
 | Escaneo BLE + match por MAC | **Real** (`ShellyBleScanner`) |

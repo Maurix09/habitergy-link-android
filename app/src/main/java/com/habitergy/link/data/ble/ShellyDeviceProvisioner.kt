@@ -103,8 +103,9 @@ class ShellyDeviceProvisioner(
                     put("topic_prefix", ShellyProvisioningConfig.mqttTopicPrefix(shortCode))
                     put("enable_control", true)
                     put("enable_rpc", true)
+                    // status_ntf: backup para marcar online vía .../status/switch:0
                     put("rpc_ntf", false)
-                    put("status_ntf", false)
+                    put("status_ntf", true)
                 })
             },
         )
