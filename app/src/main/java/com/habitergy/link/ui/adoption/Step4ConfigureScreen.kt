@@ -165,8 +165,8 @@ private fun provisionStatusLine(state: AdoptionUiState): String {
             -> "Configurando el controlador…"
             ShellyProvisionStep.ConfigureWifi -> "Configurando la red WiFi…"
             ShellyProvisionStep.ConfigureMqtt -> "Vinculando con Habitergy…"
-            ShellyProvisionStep.Reboot -> "Aplicando la configuración…"
             ShellyProvisionStep.SetAdminAuth -> "Asegurando el controlador…"
+            ShellyProvisionStep.Reboot -> "Aplicando la configuración…"
         }
         ProvisionPhase.Rebooting -> "Reiniciando el controlador…"
         ProvisionPhase.Done -> "Configuración completada"

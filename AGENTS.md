@@ -12,7 +12,7 @@ Este archivo provee contexto esencial para cualquier agente de IA (LLM) que deba
 | **Propósito** | Wizard nativo de adopción de controladores **Shelly 1PM Gen3/Gen4** (BLE, WiFi, provisioning) |
 | **Stack** | Kotlin + Jetpack Compose + Material 3 |
 | **Build** | Gradle ( **no** forma parte de pnpm/Turbo del monorepo ) |
-| **Versión actual** | `0.1.23` — pasos **1–5** (lookup, BLE, WiFi, provisioner + RPC BLE, espera online) |
+| **Versión actual** | `0.1.24` — pasos **1–5** (lookup, BLE, WiFi, provisioner + RPC BLE, espera online) |
 | **Play Store (planeado)** | Habitergy Link |
 
 Link reemplaza el wizard web de adopción en Android: acceso nativo a BLE, WiFi y provisioning sin limitaciones de Web Bluetooth ni mixed content.
@@ -224,7 +224,7 @@ Back → `goBackToStep2()` (conserva match BLE).
 Al entrar arranca automáticamente el pipeline de aprovisionamiento:
 
 1. **Broker:** `POST /api/adoption/devices/:deviceCode/provision` → backend llama `POST /provisioner/devices/{shortCode}` (API key solo en servidor).
-2. **BLE GATT:** `ShellyBleRpcClient` reconecta al dispositivo del paso 2 y ejecuta RPC: `Cloud.SetConfig` (off), `Sys.SetConfig` (nombre `SH-{shortCode}`), `Wifi.SetConfig`, `Mqtt.SetConfig` (`topic_prefix`: `habitergy/v1/{shortCode}`), `Shelly.Reboot` (con `delay_ms`), `Shelly.SetAuth`.
+2. **BLE GATT:** `ShellyBleRpcClient` reconecta al dispositivo del paso 2 y ejecuta RPC: `Cloud.SetConfig` (off), `Sys.SetConfig` (nombre `SH-{shortCode}`), `Wifi.SetConfig`, `Mqtt.SetConfig` (`topic_prefix`: `habitergy/v1/{shortCode}`), `Shelly.GetDeviceInfo` + `Shelly.SetAuth`, y al final `Shelly.Reboot` (con `delay_ms`). El reboot va último: tras agendarlo el firmware rechaza más RPC (`shutting down in X ms`).
 3. Al éxito avanza al paso 5.
 
 UI: `CircularWavyProgressIndicator` + una línea de estado. Error → código **ERROR N** grande + detalle + **Reintentar** / volver al paso 3.

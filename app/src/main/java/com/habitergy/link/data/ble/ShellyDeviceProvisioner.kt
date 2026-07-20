@@ -13,12 +13,12 @@ import java.security.MessageDigest
 
 /**
  * Orquesta la secuencia RPC-over-BLE del paso 4:
- * Cloud off → nombre → WiFi → MQTT → reboot (con delay) → auth admin.
+ * Cloud off → nombre → WiFi → MQTT → auth admin → reboot (con delay).
  *
- * El reboot se agenda **antes** de SetAuth: al activar autenticación, el canal
- * BLE exige digest auth en el siguiente RPC y `Shelly.Reboot` falla (p. ej.
- * "Unsupported Media Type"). Con `delay_ms` el dispositivo reinicia después
- * de aplicar la contraseña en flash.
+ * El reboot va **al final**. Tras `Shelly.Reboot` el firmware rechaza RPC
+ * posteriores con `-109` / `shutting down in X ms`, así que `GetDeviceInfo`
+ * y `SetAuth` deben completarse antes. El `delay_ms` da margen para
+ * desconectar GATT limpio antes del reinicio real.
  *
  * Cada fallo lanza [Step4ProvisionException] con el código de diagnóstico
  * correspondiente (ERROR 7–13).
@@ -93,16 +93,7 @@ class ShellyDeviceProvisioner(
             },
         )
 
-        // Agendar reboot antes de SetAuth (ver KDoc de la clase).
-        onStep(ShellyProvisionStep.Reboot)
-        callRpc(
-            error = Step4Error.RPC_REBOOT,
-            method = "Shelly.Reboot",
-            params = buildJsonObject {
-                put("delay_ms", REBOOT_DELAY_MS)
-            },
-        )
-
+        // Auth antes del reboot: el firmware rechaza RPC tras Shelly.Reboot.
         onStep(ShellyProvisionStep.SetAdminAuth)
         val deviceInfo = callRpc(
             error = Step4Error.RPC_GET_DEVICE_INFO,
@@ -121,6 +112,15 @@ class ShellyDeviceProvisioner(
                 put("user", "admin")
                 put("realm", deviceId)
                 put("ha1", ha1)
+            },
+        )
+
+        onStep(ShellyProvisionStep.Reboot)
+        callRpc(
+            error = Step4Error.RPC_REBOOT,
+            method = "Shelly.Reboot",
+            params = buildJsonObject {
+                put("delay_ms", REBOOT_DELAY_MS)
             },
         )
     }
@@ -155,7 +155,7 @@ class ShellyDeviceProvisioner(
     }
 
     private companion object {
-        /** Tiempo suficiente para SetAuth + disconnect antes del reinicio. */
+        /** Margen para disconnect GATT antes del reinicio real del dispositivo. */
         const val REBOOT_DELAY_MS = 2_500
     }
 }
