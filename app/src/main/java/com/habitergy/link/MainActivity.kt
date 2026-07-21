@@ -66,10 +66,20 @@ class MainActivity : ComponentActivity() {
                         .safeDrawingPadding(),
                     color = HabitergyColors.Surface,
                 ) {
-                    when (val state = entryState) {
-                        is AdoptionEntryState.Ready -> AdoptionFlow(
+                    // Evita el flash del gate "Abrí Link desde Manager" mientras se
+                    // valida el deep link: pantalla en blanco del mismo color hasta Ready.
+                    val state = entryState
+                    val awaitingSession =
+                        launchRequest is AdoptionLaunchRequest.Session &&
+                            (state is AdoptionEntryState.NoSession ||
+                                state is AdoptionEntryState.Loading)
+
+                    when {
+                        awaitingSession -> Unit
+                        state is AdoptionEntryState.Ready -> AdoptionFlow(
                             viewModel = adoptionViewModel,
                             sessionContext = state.context,
+                            onExitToManager = ::finishAndRemoveTask,
                         )
                         else -> AdoptionEntryGate(
                             state = state,

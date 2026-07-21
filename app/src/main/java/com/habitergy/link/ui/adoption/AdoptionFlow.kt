@@ -10,6 +10,7 @@ import com.habitergy.link.domain.model.AdoptionSessionContext
 fun AdoptionFlow(
     viewModel: AdoptionViewModel = viewModel(),
     sessionContext: AdoptionSessionContext,
+    onExitToManager: () -> Unit,
 ) {
     val state by viewModel.uiState.collectAsState()
 
@@ -21,8 +22,7 @@ fun AdoptionFlow(
             onScanQrClick = viewModel::onScanQrClick,
             onProceedWithoutCode = viewModel::proceedWithoutKnownCode,
             onNext = viewModel::proceedToStep2,
-            onBack = { /* primer paso: sin acción en demo */ },
-            siteName = sessionContext.site?.name,
+            onBack = onExitToManager,
         )
         2 -> Step2BleScanScreen(
             state = state,
@@ -70,8 +70,7 @@ fun AdoptionFlow(
             onScanQrClick = viewModel::onScanQrClick,
             onProceedWithoutCode = viewModel::proceedWithoutKnownCode,
             onNext = viewModel::proceedToStep2,
-            onBack = {},
-            siteName = sessionContext.site?.name,
+            onBack = onExitToManager,
         )
     }
 }

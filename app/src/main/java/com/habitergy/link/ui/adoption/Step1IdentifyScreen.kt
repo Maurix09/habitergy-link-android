@@ -11,7 +11,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
-import androidx.compose.material.icons.filled.HomeWork
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.material3.Card
@@ -49,7 +48,6 @@ fun Step1IdentifyScreen(
     onProceedWithoutCode: () -> Unit,
     onNext: () -> Unit,
     onBack: () -> Unit,
-    siteName: String?,
 ) {
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
@@ -62,7 +60,7 @@ fun Step1IdentifyScreen(
             currentStep = state.currentStep,
             totalSteps = state.totalSteps,
             onBack = onBack,
-            showBackButton = false,
+            showBackButton = true,
             modifier = Modifier.padding(innerPadding),
             content = {
                 OnboardingHeroSection(
@@ -72,11 +70,6 @@ fun Step1IdentifyScreen(
                     subtitle = "En el kit de instalación vas a encontrar un código único " +
                         "(ej: SH-KX67W) junto con un QR. Ingresá los 5 caracteres finales " +
                         "(ej: KX67W) para verificarlo o escaneá el código con la cámara.",
-                )
-
-                ManagerSiteCard(
-                    siteName = siteName,
-                    modifier = Modifier.padding(bottom = 20.dp),
                 )
 
                 DeviceCodeInput(
@@ -127,46 +120,6 @@ fun Step1IdentifyScreen(
                 )
             },
         )
-    }
-}
-
-@Composable
-private fun ManagerSiteCard(
-    siteName: String?,
-    modifier: Modifier = Modifier,
-) {
-    Card(
-        modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.cardColors(containerColor = HabitergyColors.PrimaryContainer),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            Icon(
-                imageVector = Icons.Default.HomeWork,
-                contentDescription = null,
-                tint = HabitergyColors.Primary,
-                modifier = Modifier.size(28.dp),
-            )
-            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(
-                    text = "Sesión iniciada desde Manager",
-                    style = MaterialTheme.typography.labelLarge,
-                    color = HabitergyColors.OnPrimaryContainer,
-                )
-                Text(
-                    text = siteName ?: "Sin alojamiento preseleccionado",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = HabitergyColors.TextPrimary,
-                )
-            }
-        }
     }
 }
 
