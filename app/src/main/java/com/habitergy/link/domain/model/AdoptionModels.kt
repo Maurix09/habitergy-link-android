@@ -196,6 +196,10 @@ data class AdoptionUiState(
     // Paso 5
     val onlineWaitPhase: OnlineWaitPhase = OnlineWaitPhase.Idle,
     val onlineWaitErrorMessage: String? = null,
+    val completionPhase: CompletionPhase = CompletionPhase.Idle,
+    val completionErrorMessage: String? = null,
+    // Retorno a Manager
+    val returnNavigationErrorMessage: String? = null,
 ) {
     val isUnknownDeviceCode: Boolean
         get() = deviceCodeInput == UNKNOWN_DEVICE_CODE

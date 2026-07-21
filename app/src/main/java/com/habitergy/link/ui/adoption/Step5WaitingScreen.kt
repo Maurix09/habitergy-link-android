@@ -28,6 +28,7 @@ import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.habitergy.link.domain.model.AdoptionUiState
+import com.habitergy.link.domain.model.CompletionPhase
 import com.habitergy.link.domain.model.OnlineWaitPhase
 import com.habitergy.link.ui.components.AdoptionScreenScaffold
 import com.habitergy.link.ui.components.HabitergyPrimaryButton
@@ -40,30 +41,36 @@ fun Step5WaitingScreen(
     state: AdoptionUiState,
     onStartWaiting: () -> Unit,
     onRetry: () -> Unit,
-    onNext: () -> Unit,
     onBack: () -> Unit,
 ) {
     LaunchedEffect(Unit) {
         onStartWaiting()
     }
 
-    val subtitle = when (state.onlineWaitPhase) {
-        OnlineWaitPhase.Waiting ->
-            "El controlador se está conectando a WiFi y al broker MQTT. Esto puede tardar un minuto."
-        OnlineWaitPhase.Online ->
-            "¡Controlador conectado! Ya está enviando mensajes a Habitergy."
-        OnlineWaitPhase.Timeout ->
-            "Todavía no detectamos al controlador en línea. Verificá que el WiFi tenga internet."
-        OnlineWaitPhase.Error ->
-            state.onlineWaitErrorMessage ?: "No pudimos verificar la conexión."
-        OnlineWaitPhase.Idle ->
-            "Esperando que el controlador se conecte…"
+    val subtitle = when {
+        state.completionPhase == CompletionPhase.Completing ->
+            "El controlador está en línea. Estamos completando la asignación en Manager."
+        state.completionPhase == CompletionPhase.Error ->
+            state.completionErrorMessage ?: "No pudimos completar la asignación."
+        else -> when (state.onlineWaitPhase) {
+            OnlineWaitPhase.Waiting ->
+                "El controlador se está conectando a WiFi y al broker MQTT. Esto puede tardar un minuto."
+            OnlineWaitPhase.Online ->
+                "¡Controlador conectado! Completando la adopción…"
+            OnlineWaitPhase.Timeout ->
+                "Todavía no detectamos al controlador en línea. Verificá que el WiFi tenga internet."
+            OnlineWaitPhase.Error ->
+                state.onlineWaitErrorMessage ?: "No pudimos verificar la conexión."
+            OnlineWaitPhase.Idle ->
+                "Esperando que el controlador se conecte…"
+        }
     }
 
     AdoptionScreenScaffold(
         currentStep = state.currentStep,
         totalSteps = state.totalSteps,
         onBack = onBack,
+        showBackButton = state.completionPhase == CompletionPhase.Idle,
         content = {
             ScreenTitle(
                 title = "Esperando conexión",
@@ -77,8 +84,17 @@ fun Step5WaitingScreen(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(20.dp),
             ) {
-                when (state.onlineWaitPhase) {
-                    OnlineWaitPhase.Online -> {
+                when {
+                    state.completionPhase == CompletionPhase.Error -> {
+                        Icon(
+                            imageVector = Icons.Default.ErrorOutline,
+                            contentDescription = null,
+                            tint = HabitergyColors.Error,
+                            modifier = Modifier.size(72.dp),
+                        )
+                    }
+                    state.completionPhase == CompletionPhase.Completing -> WaitingAnimation()
+                    state.onlineWaitPhase == OnlineWaitPhase.Online -> {
                         Icon(
                             imageVector = Icons.Default.CheckCircle,
                             contentDescription = null,
@@ -86,9 +102,8 @@ fun Step5WaitingScreen(
                             modifier = Modifier.size(72.dp),
                         )
                     }
-                    OnlineWaitPhase.Timeout,
-                    OnlineWaitPhase.Error,
-                    -> {
+                    state.onlineWaitPhase == OnlineWaitPhase.Timeout ||
+                        state.onlineWaitPhase == OnlineWaitPhase.Error -> {
                         Icon(
                             imageVector = Icons.Default.ErrorOutline,
                             contentDescription = null,
@@ -100,10 +115,12 @@ fun Step5WaitingScreen(
                 }
 
                 Text(
-                    text = when (state.onlineWaitPhase) {
-                        OnlineWaitPhase.Online -> "Controlador en línea"
-                        OnlineWaitPhase.Timeout -> "Sin conexión todavía"
-                        OnlineWaitPhase.Error -> "Error de verificación"
+                    text = when {
+                        state.completionPhase == CompletionPhase.Completing -> "Completando adopción…"
+                        state.completionPhase == CompletionPhase.Error -> "No pudimos asignarlo"
+                        state.onlineWaitPhase == OnlineWaitPhase.Online -> "Controlador en línea"
+                        state.onlineWaitPhase == OnlineWaitPhase.Timeout -> "Sin conexión todavía"
+                        state.onlineWaitPhase == OnlineWaitPhase.Error -> "Error de verificación"
                         else -> "Consultando cada 3 segundos…"
                     },
                     style = MaterialTheme.typography.titleLarge,
@@ -113,16 +130,16 @@ fun Step5WaitingScreen(
             }
         },
         footer = {
-            when (state.onlineWaitPhase) {
-                OnlineWaitPhase.Online -> {
+            when {
+                state.completionPhase == CompletionPhase.Error -> {
                     HabitergyPrimaryButton(
-                        label = "Siguiente",
-                        onClick = onNext,
+                        label = "Reintentar asignación",
+                        showArrow = false,
+                        onClick = onRetry,
                     )
                 }
-                OnlineWaitPhase.Timeout,
-                OnlineWaitPhase.Error,
-                -> {
+                state.onlineWaitPhase == OnlineWaitPhase.Timeout ||
+                    state.onlineWaitPhase == OnlineWaitPhase.Error -> {
                     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         HabitergyPrimaryButton(
                             label = "Reintentar",
@@ -144,7 +161,11 @@ fun Step5WaitingScreen(
                             strokeWidth = 3.dp,
                         )
                         Text(
-                            text = "Esperando conexión…",
+                            text = if (state.completionPhase == CompletionPhase.Completing) {
+                                "Completando asignación…"
+                            } else {
+                                "Esperando conexión…"
+                            },
                             style = MaterialTheme.typography.bodyMedium,
                             color = HabitergyColors.TextSecondary,
                         )

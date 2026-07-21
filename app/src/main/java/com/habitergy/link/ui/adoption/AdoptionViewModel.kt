@@ -7,6 +7,8 @@ import com.habitergy.link.data.AdoptionLookupResult
 import com.habitergy.link.data.AdoptionOnlineResult
 import com.habitergy.link.data.AdoptionProvisionResult
 import com.habitergy.link.data.AdoptionRepository
+import com.habitergy.link.data.AdoptionSessionCompleteResult
+import com.habitergy.link.data.AdoptionSessionContextResult
 import com.habitergy.link.data.ble.ShellyBleRpcClient
 import com.habitergy.link.data.ble.ShellyBleRpcException
 import com.habitergy.link.data.ble.ShellyDeviceProvisioner
@@ -20,8 +22,12 @@ import com.habitergy.link.data.wifi.WifiNetworkHelper
 import com.habitergy.link.data.wifi.WifiPermissions
 import com.habitergy.link.data.wifi.WifiScanTemporarilyUnavailableException
 import com.habitergy.link.domain.DeviceCode
+import com.habitergy.link.domain.AdoptionLaunchRequest
+import com.habitergy.link.domain.model.AdoptionEntryState
+import com.habitergy.link.domain.model.AdoptionEvent
 import com.habitergy.link.domain.model.AdoptionUiState
 import com.habitergy.link.domain.model.BleScanPhase
+import com.habitergy.link.domain.model.CompletionPhase
 import com.habitergy.link.domain.model.DEVICE_CODE_LENGTH
 import com.habitergy.link.domain.model.DeviceLookupState
 import com.habitergy.link.domain.model.DiscoveredBleDevice
@@ -46,6 +52,9 @@ import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.receiveAsFlow
+import java.time.Instant
 
 class AdoptionViewModel(
     application: Application,
@@ -59,6 +68,15 @@ class AdoptionViewModel(
 
     private val _uiState = MutableStateFlow(AdoptionUiState())
     val uiState: StateFlow<AdoptionUiState> = _uiState.asStateFlow()
+    private val _entryState = MutableStateFlow<AdoptionEntryState>(AdoptionEntryState.NoSession)
+    val entryState: StateFlow<AdoptionEntryState> = _entryState.asStateFlow()
+    private val eventChannel = Channel<AdoptionEvent>(Channel.BUFFERED)
+    val events = eventChannel.receiveAsFlow()
+
+    private var sessionToken: String? = null
+    private var launchGeneration: Long = 0
+    private var launchInitialized: Boolean = false
+    private var sessionLoadJob: Job? = null
     private var lookupJob: Job? = null
     private var activeLookupSuffix: String? = null
     private var scanJob: Job? = null
@@ -66,6 +84,77 @@ class AdoptionViewModel(
     private var wifiRetryCooldownJob: Job? = null
     private var provisionJob: Job? = null
     private var onlinePollJob: Job? = null
+    private var completionJob: Job? = null
+
+    /**
+     * Recibe el launch de la Activity. Un intent nuevo fuerza un wizard limpio;
+     * una recreación de configuración conserva el ViewModel ya inicializado.
+     */
+    fun handleLaunch(request: AdoptionLaunchRequest, forceReset: Boolean) {
+        if (launchInitialized && !forceReset) return
+        launchInitialized = true
+        launchGeneration += 1
+        resetActiveWork()
+        _uiState.value = AdoptionUiState()
+        sessionToken = null
+
+        when (request) {
+            AdoptionLaunchRequest.NoSession -> {
+                _entryState.value = AdoptionEntryState.NoSession
+            }
+            AdoptionLaunchRequest.Invalid -> {
+                _entryState.value = AdoptionEntryState.Invalid
+            }
+            is AdoptionLaunchRequest.Session -> {
+                sessionToken = request.token
+                loadSessionContext(request.token, launchGeneration)
+            }
+        }
+    }
+
+    fun retrySessionContext() {
+        val token = sessionToken ?: return
+        loadSessionContext(token, launchGeneration)
+    }
+
+    private fun loadSessionContext(token: String, generation: Long) {
+        sessionLoadJob?.cancel()
+        _entryState.value = AdoptionEntryState.Loading
+        sessionLoadJob = viewModelScope.launch {
+            when (val result = repository.getSessionContext(token)) {
+                is AdoptionSessionContextResult.Success -> {
+                    if (!isCurrentSession(token, generation)) return@launch
+                    _entryState.value = if (isExpired(result.context.expiresAt)) {
+                        AdoptionEntryState.Expired
+                    } else {
+                        AdoptionEntryState.Ready(result.context)
+                    }
+                }
+                AdoptionSessionContextResult.Invalid -> {
+                    if (isCurrentSession(token, generation)) {
+                        _entryState.value = AdoptionEntryState.Invalid
+                    }
+                }
+                AdoptionSessionContextResult.Expired -> {
+                    if (isCurrentSession(token, generation)) {
+                        _entryState.value = AdoptionEntryState.Expired
+                    }
+                }
+                AdoptionSessionContextResult.NetworkError -> {
+                    if (isCurrentSession(token, generation)) {
+                        _entryState.value = AdoptionEntryState.NetworkError
+                    }
+                }
+            }
+            sessionLoadJob = null
+        }
+    }
+
+    private fun isCurrentSession(token: String, generation: Long): Boolean =
+        sessionToken == token && launchGeneration == generation
+
+    private fun isExpired(expiresAt: String): Boolean =
+        runCatching { Instant.parse(expiresAt).isBefore(Instant.now()) }.getOrDefault(false)
 
     /**
      * Mantiene una única fuente de verdad para el código ingresado. Si el cambio
@@ -157,6 +246,9 @@ class AdoptionViewModel(
                 provisionErrorMessage = null,
                 onlineWaitPhase = OnlineWaitPhase.Idle,
                 onlineWaitErrorMessage = null,
+                completionPhase = CompletionPhase.Idle,
+                completionErrorMessage = null,
+                returnNavigationErrorMessage = null,
             )
         }
     }
@@ -217,10 +309,17 @@ class AdoptionViewModel(
 
     fun retryStep5OnlineWait() {
         if (_uiState.value.currentStep != 5) return
-        runOnlinePoll()
+        if (_uiState.value.completionPhase == CompletionPhase.Error &&
+            _uiState.value.onlineWaitPhase == OnlineWaitPhase.Online
+        ) {
+            completeAdoptionSession()
+        } else {
+            runOnlinePoll()
+        }
     }
 
     fun goBackToStep4() {
+        if (_uiState.value.completionPhase != CompletionPhase.Idle) return
         cancelOnlinePoll()
         _uiState.update {
             it.copy(
@@ -228,18 +327,26 @@ class AdoptionViewModel(
                 provisionPhase = ProvisionPhase.Done,
                 onlineWaitPhase = OnlineWaitPhase.Idle,
                 onlineWaitErrorMessage = null,
+                completionPhase = CompletionPhase.Idle,
+                completionErrorMessage = null,
             )
         }
     }
 
-    fun proceedToStep6() {
-        cancelOnlinePoll()
+    fun onReturnNavigationFailed() {
         _uiState.update {
             it.copy(
-                currentStep = 6,
-                onlineWaitPhase = OnlineWaitPhase.Online,
+                returnNavigationErrorMessage =
+                    "No encontramos una aplicación para volver a Habitergy Manager.",
             )
         }
+    }
+
+    fun retryReturnToManager() {
+        val state = _entryState.value as? AdoptionEntryState.Ready ?: return
+        if (_uiState.value.completionPhase != CompletionPhase.Completed) return
+        _uiState.update { it.copy(returnNavigationErrorMessage = null) }
+        eventChannel.trySend(AdoptionEvent.ReturnToManager(state.context.sessionId))
     }
 
     private fun runStep4Provisioning() {
@@ -372,8 +479,13 @@ class AdoptionViewModel(
                     is AdoptionOnlineResult.Status -> {
                         if (result.isOnline) {
                             _uiState.update {
-                                it.copy(onlineWaitPhase = OnlineWaitPhase.Online)
+                                it.copy(
+                                    onlineWaitPhase = OnlineWaitPhase.Online,
+                                    completionPhase = CompletionPhase.Completing,
+                                    completionErrorMessage = null,
+                                )
                             }
+                            completeAdoptionSession()
                             return@launch
                         }
                     }
@@ -390,6 +502,68 @@ class AdoptionViewModel(
             _uiState.update {
                 it.copy(onlineWaitPhase = OnlineWaitPhase.Timeout)
             }
+        }
+    }
+
+    private fun completeAdoptionSession() {
+        completionJob?.cancel()
+        val token = sessionToken
+        val deviceCode = _uiState.value.resolvedDevice?.deviceCode
+        val context = (_entryState.value as? AdoptionEntryState.Ready)?.context
+        if (token == null || deviceCode == null || context == null) {
+            failCompletion("La sesión de Manager ya no está disponible. Volvé a iniciar la adopción.")
+            return
+        }
+
+        _uiState.update {
+            it.copy(
+                completionPhase = CompletionPhase.Completing,
+                completionErrorMessage = null,
+                returnNavigationErrorMessage = null,
+            )
+        }
+        val generation = launchGeneration
+        completionJob = viewModelScope.launch {
+            when (val result = repository.completeSession(token, deviceCode)) {
+                is AdoptionSessionCompleteResult.Success -> {
+                    if (!isCurrentSession(token, generation)) return@launch
+                    if (result.sessionId != context.sessionId || result.deviceCode != deviceCode) {
+                        failCompletion("El servidor devolvió una asignación que no coincide con esta sesión.")
+                        return@launch
+                    }
+                    _uiState.update {
+                        it.copy(
+                            currentStep = 6,
+                            completionPhase = CompletionPhase.Completed,
+                            completionErrorMessage = null,
+                        )
+                    }
+                    delay(SUCCESS_DISPLAY_MS)
+                    if (isCurrentSession(token, generation)) {
+                        eventChannel.send(AdoptionEvent.ReturnToManager(result.sessionId))
+                    }
+                }
+                AdoptionSessionCompleteResult.Invalid ->
+                    failCompletion("La sesión de adopción ya no es válida.")
+                AdoptionSessionCompleteResult.Expired ->
+                    failCompletion("La sesión de adopción expiró. Iniciá una nueva desde Manager.")
+                is AdoptionSessionCompleteResult.ApiError ->
+                    failCompletion(result.message)
+                AdoptionSessionCompleteResult.NetworkError ->
+                    failCompletion(
+                        "No pudimos completar la asignación. Revisá tu conexión e intentá de nuevo.",
+                    )
+            }
+            completionJob = null
+        }
+    }
+
+    private fun failCompletion(message: String) {
+        _uiState.update {
+            it.copy(
+                completionPhase = CompletionPhase.Error,
+                completionErrorMessage = message,
+            )
         }
     }
 
@@ -410,6 +584,11 @@ class AdoptionViewModel(
     private fun cancelOnlinePoll() {
         onlinePollJob?.cancel()
         onlinePollJob = null
+    }
+
+    private fun cancelCompletion() {
+        completionJob?.cancel()
+        completionJob = null
     }
 
     fun onWifiSsidChange(value: String) {
@@ -871,13 +1050,23 @@ class AdoptionViewModel(
     }
 
     override fun onCleared() {
+        resetActiveWork()
+        sessionToken = null
+        eventChannel.close()
+        super.onCleared()
+    }
+
+    private fun resetActiveWork() {
+        sessionLoadJob?.cancel()
+        sessionLoadJob = null
+        cancelLookup()
         cancelScan()
         cancelWifiScan()
         cancelWifiRetryCooldown()
         cancelProvision()
         cancelOnlinePoll()
+        cancelCompletion()
         shellyRpcClient.disconnect()
-        super.onCleared()
     }
 
     private fun cancelLookup() {
@@ -903,5 +1092,6 @@ class AdoptionViewModel(
             "Android no pudo iniciar una búsqueda nueva. Esperá unos segundos antes de reintentar."
         private const val ONLINE_POLL_INTERVAL_MS = 3_000L
         private const val ONLINE_WAIT_TIMEOUT_MS = 180_000L
+        private const val SUCCESS_DISPLAY_MS = 900L
     }
 }

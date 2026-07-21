@@ -12,7 +12,7 @@ Este archivo provee contexto esencial para cualquier agente de IA (LLM) que deba
 | **Propósito** | Wizard nativo de adopción de controladores **Shelly 1PM Gen3/Gen4** (BLE, WiFi, provisioning) |
 | **Stack** | Kotlin + Jetpack Compose + Material 3 |
 | **Build** | Gradle ( **no** forma parte de pnpm/Turbo del monorepo ) |
-| **Versión actual** | `0.1.26` — pasos **1–5** (lookup, BLE, WiFi, provisioner + RPC BLE, espera online) |
+| **Versión actual** | `0.1.27` — pasos **1–6** + sesión efímera y retorno a Manager |
 | **Play Store (planeado)** | Habitergy Link |
 
 Link reemplaza el wizard web de adopción en Android: acceso nativo a BLE, WiFi y provisioning sin limitaciones de Web Bluetooth ni mixed content.
@@ -20,7 +20,7 @@ Link reemplaza el wizard web de adopción en Android: acceso nativo a BLE, WiFi 
 ## 2. Relación con el resto de la plataforma
 
 ```
-┌─────────────────┐     deep link (futuro)     ┌─────────────────┐
+┌─────────────────┐     deep link con sesión    ┌─────────────────┐
 │  Manager PWA    │ ─────────────────────────► │  Habitergy Link │
 │  (panel partner)│ ◄───────────────────────── │  (Android nativo)│
 └────────┬────────┘     vuelve con éxito      └────────┬────────┘
@@ -36,8 +36,8 @@ Link reemplaza el wizard web de adopción en Android: acceso nativo a BLE, WiFi 
                        └─────────┘
 ```
 
-- **Manager** (`apps/manager`): panel diario (alojamientos, consumo, finanzas). En Android, el CTA «Adoptar controlador» debería abrir Link (App Link), no el wizard PWA.
-- **API** (`apps/api`): auth JWT, lookup de device por código, registro de adopción (endpoints de adopción **aún por implementar** en backend).
+- **Manager** (`apps/manager`): panel diario (alojamientos, consumo, finanzas). En Android abre Link mediante intent explícito al package `com.habitergy.link` y el deep link de sesión.
+- **API** (`apps/api`): lookup/provisioning y sesiones efímeras de adopción (`context` + `complete`).
 - **Base de datos** (`packages/database`): tabla fría `devices` con `device_code`, `mac_address`, `model`, `status`.
 - **Flujo web legacy:** `docs/flows/adopcion-controladores.md` describe el wizard de 6 pasos en Manager PWA. **Link redefine los pasos** (ver §6); usar ese doc como referencia de producto, no como mapa 1:1 de pantallas.
 
@@ -100,8 +100,9 @@ apps/link-android/
         ├── AndroidManifest.xml   # Permisos BLE, WiFi, location, camera, INTERNET
         ├── res/xml/network_security_config.xml  # HTTPS only (sin cleartext)
         ├── java/com/habitergy/link/
-        │   ├── MainActivity.kt           # Entry: HabitergyTheme + AdoptionFlow
+        │   ├── MainActivity.kt           # Deep link, gate, AdoptionFlow y retorno a Manager
         │   ├── domain/
+        │   │   ├── AdoptionDeepLinkParser.kt # Parser puro y estricto del enlace Manager
         │   │   ├── DeviceCode.kt         # Sufijo nanoId + prefijo SH- (réplica de nanoId.ts)
         │   │   └── model/
         │   │       └── AdoptionModels.kt # UiState, enums, data classes, DeviceLookupState
@@ -130,27 +131,28 @@ apps/link-android/
 | Dominio | `domain/` | `DeviceCode` (sufijo nanoId), modelos puros sin Android |
 | Datos | `data/api/` | Ktor → `apps/api` (lookup adopción) |
 | Datos | `data/` | `AdoptionRepository` (abstracción sobre la API) |
-| Datos | `data/ble/` | `ShellyBleScanner` (escaneo paso 2), parseo Allterco, permisos; GATT Shelly (paso 4) pendiente |
+| Datos | `data/ble/` | Escaneo, parseo Allterco, permisos y RPC-over-BLE/GATT Shelly |
 | Datos | `data/wifi/` | `WifiNetworkHelper` (SSID actual + scan), `WifiPermissions` |
 
 ## 6. Flujo de adopción (Link) — estado actual
 
-Wizard planificado de **6 pasos** (`AdoptionUiState.totalSteps = 6`). Pasos **1–3** implementados.
+Wizard real de **6 pasos** (`AdoptionUiState.totalSteps = 6`), habilitado solo
+después de validar una sesión iniciada desde Manager.
 
 ```mermaid
 flowchart TD
   S1[Paso 1: Identificá el controlador]
   S2[Paso 2: Conectá por Bluetooth]
   S3[Paso 3: WiFi SSID + contraseña]
-  S4[Paso 4: Configuración Shelly — pendiente]
-  S5[Paso 5: Esperando conexión — pendiente]
-  S6[Paso 6: Éxito + asignar alojamiento — pendiente]
+  S4[Paso 4: Configuración Shelly]
+  S5[Paso 5: Online + completar sesión]
+  S6[Paso 6: Éxito + retorno a Manager]
 
   S1 -->|Siguiente| S2
   S2 -->|Siguiente| S3
   S3 -->|Siguiente| S4
   S4 -->|auto| S5
-  S5 -->|Siguiente| S6
+  S5 -->|complete automático| S6
 ```
 
 ### Paso 1 — Identificá el controlador (`Step1IdentifyScreen`)
@@ -252,15 +254,22 @@ Fuente de verdad: `domain/model/Step4Error.kt`. Cada fallo del pipeline muestra 
 
 Los RPC (7–13) se envuelven en `ShellyDeviceProvisioner` vía `Step4ProvisionException`. El ViewModel mapea los fallos de API/BLE a los códigos 1–6 y 99.
 
-### Paso 5 — Esperando conexión (`Step5WaitingScreen`)
+### Paso 5 — Esperando conexión y completando sesión (`Step5WaitingScreen`)
 
 Poll cada **3 s** a `GET /api/adoption/devices/:deviceCode/online` hasta `isOnline == true` (timeout 3 min). El mqtt-worker detecta mensajes en `habitergy/v1/{shortCode}/online` y actualiza `device_telemetry.is_online`.
 
-UI: animación «Esperando conexión». Online → **Siguiente** al paso 6 (stub). Timeout/error → **Reintentar**.
+UI: animación «Esperando conexión». Al detectar online, Link ejecuta
+automáticamente `POST /api/adoption/sessions/complete` con `deviceCode` y el
+token efímero en `X-Adoption-Session-Token`.
+Si falla, permite reintentar solo `complete`, sin repetir el provisioning. Tras
+éxito avanza automáticamente al paso 6.
 
-### Paso 6 — Controlador listo (`Step6SuccessScreen`)
+### Paso 6 — Controlador listo y retorno (`Step6SuccessScreen`)
 
-Placeholder hasta asignar alojamiento (`site_id`).
+Muestra brevemente el éxito y emite un evento a `MainActivity`. La Activity abre
+`https://app.habitergy.com/adopcion-link/retorno?sessionId=<UUID>` mediante
+`ACTION_VIEW` y llama `finishAndRemoveTask()`. El retorno contiene solo
+`sessionId`; si no hay handler, la pantalla muestra error y reintento.
 
 ## 7. Estado y lógica (`AdoptionViewModel`)
 
@@ -284,7 +293,10 @@ provisionPhase, shellyProvisionStep, provisionErrorCode, provisionErrorMessage
 // provisionErrorCode = Int de Step4Error (ver §6 Paso 4)
 
 // Paso 5
-onlineWaitPhase, onlineWaitErrorMessage
+onlineWaitPhase, onlineWaitErrorMessage, completionPhase, completionErrorMessage
+
+// Retorno
+returnNavigationErrorMessage
 
 // Navegación
 currentStep, totalSteps (= 6)
@@ -307,7 +319,13 @@ Propiedades derivadas en `AdoptionUiState`:
 
 **Provision (paso 4):** `startStep4Provisioning()`, `retryStep4Provisioning()`, `goBackToStep3()`.
 
-**Online wait (paso 5):** `startStep5OnlineWait()`, `retryStep5OnlineWait()`, `proceedToStep6()`.
+**Online wait (paso 5):** `startStep5OnlineWait()`; al detectar online ejecuta
+`complete` automáticamente. `retryStep5OnlineWait()` reintenta solo la fase que
+falló.
+
+**Entrada Manager:** `handleLaunch()` resetea trabajos y wizard ante cada intent
+nuevo, carga `context` y mantiene el token únicamente en un campo privado del
+ViewModel. No usa `SharedPreferences`, DataStore ni logging.
 
 ## 8. Datos mock
 
@@ -317,7 +335,7 @@ Propiedades derivadas en `AdoptionUiState`:
 
 | Funcionalidad | Estado |
 |---------------|--------|
-| UI pasos 1–6 | **Real** (paso 6 = stub éxito) |
+| UI pasos 1–6 | **Real** |
 | Tema M3 Habitergy | **Real** |
 | Validación checksum device_code | **Real** (`domain/DeviceCode.kt`, réplica de `nanoId.ts`) |
 | Lookup deviceCode → MAC/model/status | **Real** (`GET /api/adoption/devices/:deviceCode`) |
@@ -328,9 +346,10 @@ Propiedades derivadas en `AdoptionUiState`:
 | Escaneo BLE + match por MAC | **Real** (`ShellyBleScanner`) |
 | Formulario WiFi + scan SSIDs | **Real** (`Step3WifiScreen`) |
 | GATT / RPC-over-BLE Shelly | **Real** (`ShellyBleRpcClient`, `ShellyDeviceProvisioner`) |
-| Asignar alojamiento (paso 6) | **No implementado** |
+| Context/complete de sesión Manager | **Real** |
+| Retorno HTTPS a Manager | **Real** |
 | Auth JWT / login | **No implementado** |
-| Deep link desde Manager | **No implementado** |
+| Deep link desde Manager | **Real** (`habitergy://link/adopt?token=…`) |
 
 ## 10. Permisos (`AndroidManifest.xml`)
 
@@ -348,6 +367,11 @@ Runtime WiFi (`WifiPermissions.required`): `ACCESS_COARSE_LOCATION` + `ACCESS_FI
 
 `uses-feature`: `bluetooth_le` required; `camera` optional.
 `networkSecurityConfig`: solo HTTPS (sin cleartext).
+
+`MainActivity` usa `launchMode="singleTask"` y conserva el launcher. El filtro
+`VIEW` + `DEFAULT` + `BROWSABLE` acepta únicamente scheme `habitergy`, host
+`link` y path `/adopt`; el parser además exige exactamente un token base64url
+de 43 caracteres. La apertura manual muestra el gate «Abrí Link desde Manager».
 
 ## 11. Protocolo Shelly (referencia para BLE real)
 
@@ -368,12 +392,17 @@ Manager también tiene parsing de anuncios en `shellyAdvertisement.ts` — porta
 Endpoints relevantes:
 
 - `GET /api/adoption/devices/:deviceCode` — **lookup de adopción** (público). Devuelve `{ deviceCode, model, macAddress, status }`. Usado por el paso 1. Ver `apps/api/src/controllers/adoptionController.ts`.
+- `GET /api/adoption/sessions/context` — valida la sesión efímera recibida en
+  `X-Adoption-Session-Token` antes de habilitar el wizard; devuelve
+  `sessionId`, `expiresAt`, `returnTo` y el sitio opcional.
+- `POST /api/adoption/sessions/complete` — asigna el `deviceCode` al completar
+  la conexión online; también recibe el token en el header.
 - `GET /api/devices/code/:deviceCode` — consulta pública por código (estado/telemetría, usado por Habitergy GO). Ver `apps/api/src/controllers/deviceController.ts`.
 - `GET /api/devices` — lista del partner autenticado.
 
-**Pendiente para adopción completa:** endpoint de registro/provisionamiento del dispositivo adoptado y vinculación a `site_id` (pasos 4–6).
-
-Cliente HTTP: **Ktor Client** en `data/api/` (`AdoptionApi`), base URL en `ApiConfig` → `https://api.habitergy.com`. Auth: JWT igual que Manager (`Authorization: Bearer`) cuando se implemente login.
+Cliente HTTP: **Ktor Client** en `data/api/` (`AdoptionApi`), base URL en
+`ApiConfig` → `https://api.habitergy.com`. La sesión de adopción se autoriza
+mediante el token efímero del deep link; no se persiste.
 
 ## 13. Convenciones para agentes
 
@@ -392,13 +421,13 @@ Cliente HTTP: **Ktor Client** en `data/api/` (`AdoptionApi`), base URL en `ApiCo
 - [ ] QR real: CameraX + ML Kit / ZXing
 - [x] API lookup: `GET /api/adoption/devices/:deviceCode` (paso 1)
 - [x] Validación checksum unificada nanoId (`siteCode` + `deviceCode` SH-XXXXC)
-- [ ] Login partner (JWT) al abrir Link o vía token en deep link
+- [x] Sesión efímera vía token de deep link (sin persistencia)
 - [x] Paso 3: formulario WiFi SSID + contraseña + scan SSIDs
 - [x] Paso 4: provisioner broker + RPC-over-BLE (WiFi + MQTT + auth + reboot)
 - [x] Paso 5: espera online (poll API cada 3 s)
-- [ ] Paso 6: asignar alojamiento
-- [ ] App Link: `https://app.habitergy.com/adoptar-controlador` → abre Link
-- [ ] Manager Android: botón «Adoptar» abre Link en lugar del wizard web
+- [x] Paso 6: completar asignación y retornar a Manager
+- [x] Deep link custom scheme desde Manager
+- [ ] App Link HTTPS verificado (opcional; el contrato actual usa custom scheme)
 
 ## 15. Guía rápida: agregar una pantalla al wizard
 

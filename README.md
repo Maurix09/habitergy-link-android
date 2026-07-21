@@ -10,7 +10,7 @@ App nativa Android para la **adopción de controladores Shelly** en Habitergy. C
 - JDK 17
 - Android SDK 35
 - Emulador API 34+ (recomendado: Pixel 6)
-- Backend en `https://api.habitergy.com` (lookup de `device_code` vía API)
+- Backend en `https://api.habitergy.com` (lookup, provisioning y sesiones de adopción)
 
 ## Abrir el proyecto
 
@@ -45,6 +45,21 @@ pnpm --filter @habitergy/database seed
 # Imprime: Adoptable device (available): SH-XXXXX
 ```
 
+## Inicio desde Habitergy Manager
+
+Link no es una app independiente. Manager la abre mediante un intent explícito
+al package `com.habitergy.link` con este deep link:
+
+```text
+habitergy://link/adopt?token=<token base64url de 43 caracteres>
+```
+
+Antes de mostrar el wizard, Link valida estrictamente el enlace y consulta
+`GET /api/adoption/sessions/context`, enviando el token en
+`X-Adoption-Session-Token`. La apertura manual muestra un gate explicando que
+el flujo debe iniciarse desde Manager. El token se conserva solo en memoria
+durante la Activity/ViewModel.
+
 ## Flujo actual
 
 ### Paso 1 — Identificá el controlador (real)
@@ -77,14 +92,20 @@ pnpm --filter @habitergy/database seed
 - Reconecta por BLE GATT y envía RPC: Cloud off, nombre, WiFi, MQTT (`habitergy/v1/{shortCode}`), auth admin, reboot
 - Checklist visual + reintentar en error
 
-### Paso 5 — Esperando conexión (real)
+### Paso 5 — Esperando conexión y completar sesión (real)
 
 - Poll `GET .../online` cada 3 s (timeout 3 min)
-- Animación de espera; **Siguiente** al paso 6 cuando `isOnline`
+- Al detectar `isOnline`, ejecuta automáticamente
+  `POST /api/adoption/sessions/complete` con `deviceCode` y el token en el
+  header
+- Un error al completar permite reintentar la asignación sin volver a provisionar
 
-### Paso 6 — Éxito (stub)
+### Paso 6 — Éxito y retorno (real)
 
-- Placeholder hasta asignar alojamiento
+- Muestra brevemente la asignación exitosa y abre
+  `https://app.habitergy.com/adopcion-link/retorno?sessionId=<UUID>`
+- El retorno no incluye token, `partnerId`, `siteId` ni `deviceCode`
+- Si Android no encuentra un handler para el retorno, permite reintentar
 
 ## Estructura
 
@@ -113,12 +134,13 @@ app/src/main/java/com/habitergy/link/
 - [x] Paso 3: formulario WiFi + scan SSIDs
 - [ ] Paso 4: GATT / RPC-over-BLE (enviar WiFi + MQTT al Shelly)
 - [ ] QR con CameraX + ML Kit
-- [ ] Deep link desde Manager PWA
-- [ ] Pasos 5–6: espera online + asignar alojamiento
+- [x] Deep link custom scheme desde Manager
+- [x] Sesión efímera Manager → Link, complete y retorno automático
 
 ## Relación con Manager
 
-Manager PWA sigue siendo el panel del partner. Link es el flujo de vinculación física del Shelly. En Android, el botón «Adoptar controlador» del Manager debería abrir Link vía App Link.
+Manager sigue siendo el panel del partner. Link es únicamente el flujo de
+vinculación física del Shelly y requiere una sesión iniciada desde Manager.
 
 ## Releases
 

@@ -5,6 +5,7 @@ import io.ktor.client.call.body
 import io.ktor.client.engine.android.Android
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.request.get
+import io.ktor.client.request.header
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.HttpResponse
@@ -40,6 +41,20 @@ class AdoptionApi(
         return client.get("$baseUrl${ApiConfig.ADOPTION_DEVICE_PATH}/$fullCode/online")
     }
 
+    suspend fun getSessionContext(token: String): HttpResponse {
+        return client.get("$baseUrl${ApiConfig.ADOPTION_SESSION_PATH}/context") {
+            header(ADOPTION_SESSION_TOKEN_HEADER, token)
+        }
+    }
+
+    suspend fun completeSession(token: String, deviceCode: String): HttpResponse {
+        return client.post("$baseUrl${ApiConfig.ADOPTION_SESSION_PATH}/complete") {
+            header(ADOPTION_SESSION_TOKEN_HEADER, token)
+            contentType(ContentType.Application.Json)
+            setBody(AdoptionSessionCompleteRequestDto(deviceCode))
+        }
+    }
+
     suspend fun parseFound(response: HttpResponse): AdoptionDeviceDto {
         return response.body<AdoptionDeviceDto>()
     }
@@ -52,6 +67,14 @@ class AdoptionApi(
         return response.body<AdoptionOnlineDto>()
     }
 
+    suspend fun parseSessionContext(response: HttpResponse): AdoptionSessionContextDto {
+        return response.body<AdoptionSessionContextDto>()
+    }
+
+    suspend fun parseSessionComplete(response: HttpResponse): AdoptionSessionCompleteDto {
+        return response.body<AdoptionSessionCompleteDto>()
+    }
+
     suspend fun parseErrorMessage(response: HttpResponse): String? {
         return runCatching {
             response.body<AdoptionErrorDto>().message
@@ -59,6 +82,8 @@ class AdoptionApi(
     }
 
     companion object {
+        private const val ADOPTION_SESSION_TOKEN_HEADER = "X-Adoption-Session-Token"
+
         fun createClient(): HttpClient = HttpClient(Android) {
             install(ContentNegotiation) {
                 json(

@@ -17,25 +17,30 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.habitergy.link.domain.model.AdoptionUiState
 import com.habitergy.link.ui.components.AdoptionScreenScaffold
+import com.habitergy.link.ui.components.HabitergyPrimaryButton
 import com.habitergy.link.ui.components.ScreenTitle
 import com.habitergy.link.ui.theme.HabitergyColors
 
-/**
- * Paso 6 — placeholder hasta implementar asignación de alojamiento.
- */
 @Composable
 fun Step6SuccessScreen(
     state: AdoptionUiState,
-    onBack: () -> Unit,
+    siteName: String?,
+    onRetryReturn: () -> Unit,
 ) {
+    val navigationError = state.returnNavigationErrorMessage
     AdoptionScreenScaffold(
         currentStep = state.currentStep,
         totalSteps = state.totalSteps,
-        onBack = onBack,
+        onBack = {},
+        showBackButton = false,
         content = {
             ScreenTitle(
                 title = "Controlador listo",
-                subtitle = "El controlador ya está conectado a Habitergy. La asignación al alojamiento se habilitará en una próxima versión.",
+                subtitle = if (siteName != null) {
+                    "El controlador quedó asignado a $siteName. Volviendo a Habitergy Manager…"
+                } else {
+                    "El controlador quedó asignado. Volviendo a Habitergy Manager…"
+                },
             )
             Column(
                 modifier = Modifier
@@ -58,8 +63,24 @@ fun Step6SuccessScreen(
                         textAlign = TextAlign.Center,
                     )
                 }
+                navigationError?.let { message ->
+                    Text(
+                        text = message,
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = HabitergyColors.Error,
+                        textAlign = TextAlign.Center,
+                    )
+                }
             }
         },
-        footer = {},
+        footer = {
+            if (navigationError != null) {
+                HabitergyPrimaryButton(
+                    label = "Volver a Manager",
+                    onClick = onRetryReturn,
+                    showArrow = false,
+                )
+            }
+        },
     )
 }

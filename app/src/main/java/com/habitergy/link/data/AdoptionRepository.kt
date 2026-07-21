@@ -1,6 +1,8 @@
 package com.habitergy.link.data
 
 import com.habitergy.link.data.api.AdoptionApi
+import com.habitergy.link.domain.model.AdoptionSessionContext
+import com.habitergy.link.domain.model.AdoptionSiteDisplay
 import io.ktor.http.isSuccess
 import kotlinx.coroutines.CancellationException
 
@@ -37,6 +39,27 @@ sealed interface AdoptionOnlineResult {
 
     data object NotFound : AdoptionOnlineResult
     data object NetworkError : AdoptionOnlineResult
+}
+
+sealed interface AdoptionSessionContextResult {
+    data class Success(val context: AdoptionSessionContext) : AdoptionSessionContextResult
+    data object Invalid : AdoptionSessionContextResult
+    data object Expired : AdoptionSessionContextResult
+    data object NetworkError : AdoptionSessionContextResult
+}
+
+sealed interface AdoptionSessionCompleteResult {
+    data class Success(
+        val sessionId: String,
+        val deviceCode: String,
+        val model: String,
+        val siteId: String?,
+    ) : AdoptionSessionCompleteResult
+
+    data object Invalid : AdoptionSessionCompleteResult
+    data object Expired : AdoptionSessionCompleteResult
+    data class ApiError(val message: String) : AdoptionSessionCompleteResult
+    data object NetworkError : AdoptionSessionCompleteResult
 }
 
 /**
@@ -107,5 +130,67 @@ class AdoptionRepository(
         throw exception
     } catch (_: Exception) {
         AdoptionOnlineResult.NetworkError
+    }
+
+    suspend fun getSessionContext(token: String): AdoptionSessionContextResult = try {
+        val response = api.getSessionContext(token)
+        when {
+            response.status.isSuccess() -> {
+                val dto = api.parseSessionContext(response)
+                AdoptionSessionContextResult.Success(
+                    AdoptionSessionContext(
+                        sessionId = dto.sessionId,
+                        expiresAt = dto.expiresAt,
+                        returnTo = dto.returnTo,
+                        site = dto.site?.let { site ->
+                            AdoptionSiteDisplay(id = site.id, name = site.name)
+                        },
+                    ),
+                )
+            }
+            response.status.value == 400 ||
+                response.status.value == 404 ||
+                response.status.value == 409 -> AdoptionSessionContextResult.Invalid
+            response.status.value == 410 -> AdoptionSessionContextResult.Expired
+            else -> AdoptionSessionContextResult.NetworkError
+        }
+    } catch (exception: CancellationException) {
+        throw exception
+    } catch (_: Exception) {
+        AdoptionSessionContextResult.NetworkError
+    }
+
+    suspend fun completeSession(
+        token: String,
+        deviceCode: String,
+    ): AdoptionSessionCompleteResult = try {
+        val response = api.completeSession(token, deviceCode)
+        when {
+            response.status.isSuccess() -> {
+                val dto = api.parseSessionComplete(response)
+                if (!dto.completed || dto.status != "assigned") {
+                    AdoptionSessionCompleteResult.ApiError(
+                        "El servidor no confirmó la asignación del controlador.",
+                    )
+                } else {
+                    AdoptionSessionCompleteResult.Success(
+                        sessionId = dto.sessionId,
+                        deviceCode = dto.deviceCode,
+                        model = dto.model,
+                        siteId = dto.siteId,
+                    )
+                }
+            }
+            response.status.value == 404 -> AdoptionSessionCompleteResult.Invalid
+            response.status.value == 410 -> AdoptionSessionCompleteResult.Expired
+            else -> AdoptionSessionCompleteResult.ApiError(
+                api.parseErrorMessage(response)
+                    ?: "No pudimos completar la adopción. Intentá de nuevo.",
+            )
+        }
+    } catch (exception: CancellationException) {
+        throw exception
+    } catch (_: Exception) {
+        AdoptionSessionCompleteResult.NetworkError
     }
 }

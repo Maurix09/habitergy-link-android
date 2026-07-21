@@ -26,6 +26,35 @@ data class AdoptionOnlineDto(
 )
 
 @Serializable
+data class AdoptionSessionSiteDto(
+    val id: String,
+    val name: String,
+)
+
+@Serializable
+data class AdoptionSessionContextDto(
+    val sessionId: String,
+    val expiresAt: String,
+    val returnTo: String,
+    val site: AdoptionSessionSiteDto? = null,
+)
+
+@Serializable
+data class AdoptionSessionCompleteRequestDto(
+    val deviceCode: String,
+)
+
+@Serializable
+data class AdoptionSessionCompleteDto(
+    val sessionId: String,
+    val deviceCode: String,
+    val model: String,
+    val status: String,
+    val siteId: String? = null,
+    val completed: Boolean,
+)
+
+@Serializable
 data class AdoptionErrorDto(
     val error: Boolean = true,
     val message: String? = null,

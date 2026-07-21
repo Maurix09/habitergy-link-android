@@ -8,4 +8,5 @@ object ApiConfig {
     const val BASE_URL: String = "https://api.habitergy.com"
 
     const val ADOPTION_DEVICE_PATH = "/api/adoption/devices"
+    const val ADOPTION_SESSION_PATH = "/api/adoption/sessions"
 }

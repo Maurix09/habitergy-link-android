@@ -4,10 +4,12 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.habitergy.link.domain.model.AdoptionSessionContext
 
 @Composable
 fun AdoptionFlow(
     viewModel: AdoptionViewModel = viewModel(),
+    sessionContext: AdoptionSessionContext,
 ) {
     val state by viewModel.uiState.collectAsState()
 
@@ -20,6 +22,7 @@ fun AdoptionFlow(
             onProceedWithoutCode = viewModel::proceedWithoutKnownCode,
             onNext = viewModel::proceedToStep2,
             onBack = { /* primer paso: sin acción en demo */ },
+            siteName = sessionContext.site?.name,
         )
         2 -> Step2BleScanScreen(
             state = state,
@@ -53,12 +56,12 @@ fun AdoptionFlow(
             state = state,
             onStartWaiting = viewModel::startStep5OnlineWait,
             onRetry = viewModel::retryStep5OnlineWait,
-            onNext = viewModel::proceedToStep6,
             onBack = viewModel::goBackToStep4,
         )
         6 -> Step6SuccessScreen(
             state = state,
-            onBack = viewModel::goBackToStep4,
+            siteName = sessionContext.site?.name,
+            onRetryReturn = viewModel::retryReturnToManager,
         )
         else -> Step1IdentifyScreen(
             state = state.copy(currentStep = 1),
@@ -68,6 +71,7 @@ fun AdoptionFlow(
             onProceedWithoutCode = viewModel::proceedWithoutKnownCode,
             onNext = viewModel::proceedToStep2,
             onBack = {},
+            siteName = sessionContext.site?.name,
         )
     }
 }
